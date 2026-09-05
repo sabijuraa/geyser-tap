@@ -1,0 +1,37 @@
+[package]
+name = "geyser-tap-sink-kafka"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Kafka sink implementation for geyser-tap"
+
+[dependencies]
+geyser-tap-common.workspace = true
+geyser-tap-proto.workspace = true
+
+# Kafka
+rdkafka.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Observability
+tracing.workspace = true
+prometheus.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Concurrency
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+
+# Serialization
+serde.workspace = true
+bytes.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
