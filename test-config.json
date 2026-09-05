@@ -19,9 +19,6 @@
       }
     }
   },
-  "kafka": {
-    "enabled": false
-  },
   "ws": {
     "enabled": true,
     "bind_address": "127.0.0.1:10001",
