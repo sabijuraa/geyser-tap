@@ -60,7 +60,7 @@ types do not implement Serialize), and non-legacy versioned transactions fall
 back to emitting the message hash.
 
 ## FR3: Three egress sinks
-**Status: PASS for gRPC and websocket; Kafka UNVERIFIED**
+**Status: PASS for all three sinks**
 
 Previously FAIL: `GrpcSink::start()` was a stub that never bound, and the
 websocket sink was not wired into the plugin at all.
@@ -93,12 +93,79 @@ then 3671 frames in ~20s):
 FRAME COUNTS BY TYPE: {'type': 3671}
 ```
 
-**Kafka is not verified.** The producer is implemented but no broker was run
-against it, so no message was ever confirmed delivered. Do not read FR3 as
-"all three sinks proven".
+**Kafka is now verified** against a real broker (Apache Kafka 3.7.1 in KRaft
+mode on localhost:9092). See the Kafka section below for the evidence.
 
 Also still missing: the websocket sink has no per-client server-side
 filtering; every connected client gets the full configured stream.
+
+## Kafka sink (part of FR3)
+**Status: PASS**
+
+Previously "implemented, never run against a broker". A real broker was run
+here: Apache Kafka 3.7.1 in KRaft mode (no ZooKeeper), single node on
+localhost:9092, with topics `solana-updates`, `solana-accounts` and
+`solana-transactions` at 3 partitions each.
+
+Running it immediately exposed a bug that code review had not: the producer
+sets `enable.idempotence=true`, which librdkafka only permits with
+`acks=all`, while the config default and both shipped examples used `"1"`.
+Validator startup aborted with:
+
+```
+Failed to load the Geyser plugin: on_load method of plugin geyser-tap failed:
+(failed to create sinks: sink error: connection failed to localhost:9092:
+Client creation error: `acks` must be set to `all` when `enable.idempotence`
+is true)
+```
+
+So the Kafka sink could never have worked as documented. Fixed by forcing
+`acks=all` with a warning, and correcting the default and both examples.
+
+After the fix, messages land on the topics:
+
+```
+$ kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic solana-accounts
+solana-accounts:0:358
+solana-accounts:1:341
+solana-accounts:2:502
+
+$ kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic solana-transactions
+solana-transactions:0:50
+solana-transactions:1:51
+solana-transactions:2:55
+
+$ kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic solana-updates
+solana-updates:0:3822
+solana-updates:1:3296
+solana-updates:2:4684
+```
+
+Broker-side log dump confirms real records with signature-sized keys and
+zstd compression actually applied:
+
+```
+| offset: 0 CreateTime: 1788602272096 keySize: 64 valueSize: 412 sequence: 0
+  compresscodec: zstd crc: 2640682151 isvalid: true
+```
+
+Reading the messages back and decoding them as `StreamUpdate` (via
+`cargo run -p geyser-tap-sink-kafka --example verify_topic`) shows they are
+well-formed, not just bytes:
+
+```
+offset=0 partition=2 key_len=64 payload_len=420 seq=671 TRANSACTION sig=2aNjuKjg7s9oyfqpJEpWYj2L6S9Nd5h6UdVKxff6YqWWkyRtNt2tgBdSouRVzi6EKq9Sg1PTNceNxYWSqPdZs9h6 slot=6 is_vote=true tx_bytes=331
+offset=1 partition=2 key_len=64 payload_len=424 seq=825 TRANSACTION sig=4fCMfqBVYfRyTTmpCRBqPM8Ruzcbg6vLD1sK9bEsAUyUP8Db1uJfTgZy1ch4SF9CiYb7qBFt1ChKEvHKEn3uHkKo slot=8 is_vote=true tx_bytes=335
+
+offset=0 partition=2 key_len=32 payload_len=17169 seq=1 ACCOUNT pubkey=Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo owner=BPFLoader2111111111111111111111111111111111 slot=0 lamports=119712000 data_len=17072
+offset=3 partition=2 key_len=32 payload_len=100 seq=7 ACCOUNT pubkey=StakeConfig11111111111111111111111111111111 owner=Config1111111111111111111111111111111111111 slot=0 lamports=960480 data_len=10
+```
+
+Key sizes confirm the partitioner: 64 bytes (transaction signature) on the
+transaction topic, 32 bytes (account pubkey) on the account topic.
+
+Not covered: SASL/SSL authentication (the build disables those features), and
+multi-broker or failover behaviour.
 
 ## FR4: Subscription/filtering engine
 **Status: PASS**
@@ -151,25 +218,60 @@ Bounded crossbeam channel with `try_send` and drop-on-full
 Not stress-tested to the point of actually forcing drops.
 
 ## FR8: Observable with Prometheus metrics
-**Status: FAIL**
+**Status: PASS**
 
-Correcting an earlier statement in this document: I previously recorded this
-as "endpoint present, not scraped". That was wrong. There is **no exporter at
-all**.
+Previously FAIL: the counters were incremented in-process but nothing gathered,
+encoded or served them, so `metrics.bind_address` was dead config and the
+plugin could not be scraped at all. `common::metrics_server` now serves
+`/metrics`, `/health/live` and `/health/ready`.
 
-`crates/common/src/metrics.rs` defines the counters and they are incremented
-at runtime, but nothing gathers or encodes them and no HTTP server is ever
-bound. There is no `TextEncoder`, no `prometheus::gather()`, and no listener
-anywhere in the workspace:
+Verified against a live validator with the plugin loaded (endpoint on
+127.0.0.1:9091):
 
 ```
-$ grep -rn 'TextEncoder\|prometheus::gather\|default_registry' --include=*.rs crates/
-(no matches)
+$ curl -s -D - -o /dev/null http://127.0.0.1:9091/metrics | head -3
+HTTP/1.1 200 OK
+content-type: text/plain; version=0.0.4; charset=utf-8
+content-length: 1656
+
+$ curl -s http://127.0.0.1:9091/metrics | grep -E 'updates_received|channel|current_slot'
+geyser_tap_channel_capacity 10000
+geyser_tap_channel_depth 0
+geyser_tap_current_slot 100
+# HELP geyser_tap_updates_received_total Total number of updates received from the validator
+# TYPE geyser_tap_updates_received_total counter
+geyser_tap_updates_received_total{type="account"} 928
+geyser_tap_updates_received_total{type="block_metadata"} 100
+geyser_tap_updates_received_total{type="entry"} 6603
+geyser_tap_updates_received_total{type="slot"} 269
+geyser_tap_updates_received_total{type="transaction"} 101
 ```
 
-`metrics.bind_address` is parsed from config and then never read, so a config
-enabling metrics is silently inert. The counters are real and maintained; they
-are simply unreachable from outside the process.
+Egress counters are populated per sink while consumers are attached:
+
+```
+geyser_tap_updates_sent_total{sink="grpc",type="entry"} 11656
+geyser_tap_updates_sent_total{sink="websocket",type="entry"} 11656
+```
+
+Health endpoints and routing:
+
+```
+$ curl -s -i http://127.0.0.1:9091/health/live
+HTTP/1.1 200 OK
+{"status":"live"}
+
+$ curl -s -i http://127.0.0.1:9091/health/ready
+HTTP/1.1 200 OK
+{"status":"ready"}
+
+$ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9091/nope
+404
+```
+
+Readiness is distinct from liveness: the exporter binds before the sinks come
+up, so `/health/live` answers during startup while `/health/ready` returns 503
+until the worker has started the sinks.
 
 ## NFR: Quality
 **Status: PASS**
@@ -250,12 +352,12 @@ the run.
 |------|--------|
 | FR1: GeyserPlugin trait | PASS |
 | FR2: Real payloads | PASS - verified from consumer output |
-| FR3: Three sinks | PASS for gRPC + ws; Kafka UNVERIFIED |
+| FR3: Three sinks | PASS - gRPC, websocket and Kafka all verified live |
 | FR4: Filtering | PASS |
 | FR5: SDK | PASS - was a stub, now real |
 | FR6: FFI safety | PASS - was defeated by panic=abort |
 | FR7: Backpressure | PASS |
-| FR8: Metrics | FAIL - counters recorded, no exporter exists |
+| FR8: Metrics | PASS - /metrics + /health served and scraped |
 | Clippy / tests | PASS - 33 tests |
 | E2E consumer test | PASS - 5496 updates, all five types |
 | Docker image | UNVERIFIED - no daemon |

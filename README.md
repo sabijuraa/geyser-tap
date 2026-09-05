@@ -23,8 +23,8 @@ Not everything is proven. Current state, honestly:
 | Rust SDK client | **Verified** - produced the evidence above |
 | FFI panic isolation | **Verified** - `panic="unwind"` confirmed on the artifact |
 | Backpressure | Implemented; not stress-tested to forced drops |
-| Kafka sink | **Implemented, never run against a broker** |
-| Prometheus metrics | Counters recorded, but **no exporter exists** (see below) |
+| Kafka sink | **Verified** - messages produced to and read back off a live broker |
+| Prometheus metrics | **Verified** - `/metrics` and health endpoints served and scraped |
 | Docker image | Rust pin corrected but **image never built** (no daemon here) |
 
 This is a portfolio/reference implementation, not something that has carried
@@ -87,8 +87,8 @@ each `extern "C"` callback, so no panic reaches the FFI boundary.
 - **Per-type filtering**: subscribe to accounts, transactions, slots, entries, block metadata
 - **Account filters**: filter by owner program or pubkey
 - **Backpressure**: drops updates rather than blocking the validator
-- **Metrics counters**: recorded in-process; note there is currently **no
-  Prometheus HTTP exporter** - see [Metrics](#metrics)
+- **Prometheus metrics**: `/metrics` exposition plus `/health/live` and
+  `/health/ready` endpoints (verified)
 
 ## Quick Start
 
@@ -275,13 +275,28 @@ See [config.example.json](config.example.json) for full options.
 | `metrics` | `enabled` | `true` | Enable Prometheus |
 | `metrics` | `bind_address` | `127.0.0.1:9090` | Metrics endpoint |
 
-## Metrics
+## Metrics and health
 
-> **There is currently no Prometheus HTTP exporter.** The counters below are
-> defined and incremented in-process, but nothing gathers or serves them, so
-> `metrics.bind_address` in the config is parsed and then unused. Scraping the
-> plugin does not work yet. The counters are listed here because they exist in
-> code and are maintained at runtime, not because they are reachable.
+The plugin serves three endpoints on `metrics.bind_address` (default
+`127.0.0.1:9090`):
+
+| Path | Purpose |
+|------|---------|
+| `/metrics` | Prometheus text exposition (`version=0.0.4`) |
+| `/health/live` | 200 once the server is accepting connections |
+| `/health/ready` | 200 after the sinks have started, 503 before |
+
+Liveness and readiness differ deliberately: the exporter binds before the
+sinks come up, so `/health/live` answers during startup while `/health/ready`
+stays 503 until the sinks are running. A failure to bind the metrics server is
+logged and the plugin continues without it, rather than failing `on_load` --
+losing observability should not take down a validator.
+
+```bash
+curl -s http://127.0.0.1:9090/metrics | grep updates_received
+# geyser_tap_updates_received_total{type="account"} 928
+# geyser_tap_updates_received_total{type="transaction"} 101
+```
 
 All metrics use the `geyser_tap_` prefix:
 
@@ -295,7 +310,7 @@ All metrics use the `geyser_tap_` prefix:
 | `grpc_clients` | Gauge | Connected gRPC clients |
 | `current_slot` | Gauge | Latest slot processed |
 
-Once an exporter exists, drop rate would be:
+Drop rate over 5 minutes:
 ```promql
 rate(geyser_tap_updates_dropped_total[5m])
 / rate(geyser_tap_updates_received_total[5m])
@@ -348,9 +363,16 @@ ss -ltn | grep -E ':10000|:10001'    # both sinks should be listening
 cargo run --release -p geyser-tap-sdk --example consume -- http://127.0.0.1:10000 30
 ```
 
-`docker-compose.yml` provides a Kafka service for exercising the Kafka sink.
-That path has not been run yet, and `config/prometheus.yml` is gitignored, so
-the compose stack needs it created locally first.
+To exercise the Kafka sink, point `kafka.brokers` at a broker and read the
+messages back:
+
+```bash
+cargo run --release -p geyser-tap-sink-kafka --example verify_topic -- \
+  localhost:9092 solana-transactions 5
+```
+
+`docker-compose.yml` provides a Kafka service; `config/prometheus.yml` is
+gitignored, so the compose stack needs it created locally first.
 
 ## Deployment Checklist
 
@@ -358,7 +380,8 @@ the compose stack needs it created locally first.
 - [ ] Build with the **exact** rustc the target validator was built with
 - [ ] Verify `panic = "unwind"` in Cargo.toml (`abort` disables panic isolation)
 - [ ] Test with validator on devnet first
-- [ ] Note: metrics alerting is not possible yet - no exporter
+- [ ] Configure alerts on `geyser_tap_updates_dropped_total` and scrape
+      `/metrics`; wire `/health/ready` into your orchestrator
 - [ ] Set appropriate `channel_capacity` for your load
 - [ ] Monitor memory usage (should stay bounded)
 - [ ] Test graceful shutdown with `on_unload`
@@ -395,8 +418,12 @@ startup, so the plugin's `tracing_subscriber` init is a no-op and all plugin
 
 ### Updates being dropped
 
-There is no metrics endpoint to check yet (see [Metrics](#metrics)). If you
-suspect drops:
+Check the metrics endpoint:
+```bash
+curl -s http://127.0.0.1:9090/metrics | grep dropped
+```
+
+If `geyser_tap_updates_dropped_total` is increasing:
 1. Increase `channel_capacity` (uses more memory)
 2. Add more Kafka brokers / gRPC clients
 3. Check if downstream is healthy
