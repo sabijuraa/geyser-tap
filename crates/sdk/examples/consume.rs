@@ -10,6 +10,11 @@
 //!
 //! Args: <endpoint> [seconds to run]
 
+// This is a command-line example: stdout is the output. The workspace
+// lint against println! exists to keep it out of the plugin, which logs
+// through tracing because it runs inside the validator process.
+#![allow(clippy::disallowed_methods)]
+
 use geyser_tap_sdk::{GeyserClient, SubscriptionBuilder, Update};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -17,7 +22,9 @@ use std::time::{Duration, Instant};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let endpoint = args.next().unwrap_or_else(|| "http://127.0.0.1:10000".to_string());
+    let endpoint = args
+        .next()
+        .unwrap_or_else(|| "http://127.0.0.1:10000".to_string());
     let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(20);
 
     println!("connecting to {endpoint} ...");
@@ -55,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let next = match tokio::time::timeout(remaining, stream.next()).await {
-            Err(_) => break,          // ran out the clock
+            Err(_) => break, // ran out the clock
             Ok(None) => {
                 println!("stream closed by server");
                 break;
@@ -88,13 +95,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if shown_of_kind <= 2 && samples_shown < 12 {
             samples_shown += 1;
             match &update {
-                Update::Account(a) => println!(
+                Update::Account(a) => {
+                    println!(
                     "[account] pubkey={} owner={} slot={} lamports={} data_len={} executable={}",
                     a.pubkey, a.owner, a.slot, a.lamports, a.data.len(), a.executable
-                ),
+                )
+                }
                 Update::Transaction(t) => println!(
                     "[transaction] sig={} slot={} index={} is_vote={} tx_bytes={}",
-                    t.signature, t.slot, t.index, t.is_vote, t.transaction.len()
+                    t.signature,
+                    t.slot,
+                    t.index,
+                    t.is_vote,
+                    t.transaction.len()
                 ),
                 Update::Slot(s) => println!(
                     "[slot] slot={} parent={:?} status={:?}",

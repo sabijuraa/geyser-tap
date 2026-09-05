@@ -135,10 +135,8 @@ impl GrpcServer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         *self.shutdown_tx.write() = Some(shutdown_tx);
 
-        let service = GeyserService::new(
-            Arc::clone(&self.broadcaster),
-            self.config.max_connections,
-        );
+        let service =
+            GeyserService::new(Arc::clone(&self.broadcaster), self.config.max_connections);
         let svc = GeyserStreamServer::new(service);
 
         tokio::spawn(async move {

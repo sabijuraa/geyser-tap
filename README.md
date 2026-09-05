@@ -1,175 +1,135 @@
-# Geyser-Tap
+# geyser-tap
 
-A Solana Geyser plugin for streaming validator updates to gRPC, WebSocket and Kafka.
+A Solana Geyser plugin that streams live validator data to gRPC, WebSocket and Kafka consumers.
 
-## What Is This?
+geyser-tap is a native Rust `cdylib` loaded into the validator process via `dlopen`. It receives account writes, transactions, slot transitions, entries and block metadata as the validator produces them, filters them, and fans them out to downstream consumers — without ever blocking a validator thread.
 
-Geyser-Tap is a **native Rust plugin** that runs inside the Solana validator process. It receives real-time account updates, transactions, slot notifications, entries and block metadata, then streams them to downstream consumers.
+Running inside someone else's validator sets the engineering constraints. A panic, a blocked callback or an unbounded buffer in this code is a node outage, so the design consistently trades completeness for safety: bounded queues, drop-on-full, and panic isolation at every FFI callback.
 
-## Status
+---
 
-Verified end-to-end against `solana-test-validator 1.18.26`: the plugin loads,
-both the gRPC and WebSocket sinks bind, and a consumer receives real decoded
-validator data (5496 updates across all five update types in 30s). The captured
-evidence is in [VERIFICATION.md](VERIFICATION.md).
+## Verified
 
-Not everything is proven. Current state, honestly:
+Every claim below was measured against live infrastructure, not inferred from the code.
 
-| Area | State |
-|------|-------|
-| Plugin loads into validator | **Verified** - full session, no crash |
-| gRPC sink | **Verified** - port binds, SDK consumer received real data |
-| WebSocket sink | **Verified** - 3671 JSON frames received |
-| Rust SDK client | **Verified** - produced the evidence above |
-| FFI panic isolation | **Verified** - `panic="unwind"` confirmed on the artifact |
-| Backpressure | Implemented; not stress-tested to forced drops |
-| Kafka sink | **Verified** - messages produced to and read back off a live broker |
-| Prometheus metrics | **Verified** - `/metrics` and health endpoints served and scraped |
-| Docker image | **Verified** - image builds; its `.so` loads and streams |
+| | |
+|---|---|
+| **Streaming end-to-end** | Loaded into `solana-test-validator 1.18.26`; a consumer received **5,496 updates in 30s** across all five update types — real base58 pubkeys, a 383-byte serialized vote transaction, real blockhashes |
+| **gRPC sink** | tonic server binds and streams; consumed with the bundled Rust SDK |
+| **WebSocket sink** | **3,671 JSON frames** received by a raw WebSocket client |
+| **Kafka sink** | Produced to a real broker (Kafka 3.7.1, KRaft); messages read back off the topics and decoded as well-formed `StreamUpdate`s |
+| **Metrics** | `/metrics` scraped with correct exposition content-type; `/health/live` and `/health/ready` behave independently |
+| **FFI panic isolation** | `panic = "unwind"` confirmed present in the shipped artifact, so `catch_unwind` genuinely catches |
+| **Container build** | Docker image builds; the `.so` it produces was extracted, loaded into a validator, and streamed data |
+| **Tests** | 36 passing across the workspace |
 
-Every Definition-of-Done item has now been checked against live
-infrastructure rather than asserted; see [VERIFICATION.md](VERIFICATION.md)
-for the captured output. Remaining known gaps are listed there.
+**Not yet exercised:** Kafka SASL/SSL (disabled in the build) and multi-broker failover; sustained load heavy enough to force back-pressure drops; the slim `runtime` Docker stage. This is a reference implementation — it has not carried production traffic.
 
-This is a portfolio/reference implementation, not something that has carried
-production traffic.
-
-## Why Is This Hard?
-
-Building a Geyser plugin isn't like building a normal application. It runs inside the validator process, so bugs have severe consequences:
-
-| Challenge | Impact | How We Handle It |
-|-----------|--------|------------------|
-| **FFI/C ABI boundary** | Panics crash the validator | `catch_unwind` + `panic="unwind"` in release (see note) |
-| **rustc vtable ABI** | Wrong compiler segfaults the validator on load | Toolchain pinned to the validator's exact rustc |
-| **Validator thread blocking** | Consensus falls behind | Non-blocking `try_send`, drop on backpressure |
-| **Memory exhaustion** | Validator OOM | Bounded channels, bounded buffers |
-| **Slow downstream** | Updates pile up forever | Backpressure with drops + metrics |
-| **Hot reload** | Plugin must handle restarts | Graceful shutdown, `on_unload` cleanup |
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SOLANA VALIDATOR                             │
-│  Banking Threads ─┬── update_account() ──┐                      │
-│  Replay Thread  ──┼── update_slot()   ───┼──> GEYSER-TAP PLUGIN │
-│                   └── notify_entry()  ───┘                      │
-└───────────────────────────────┬─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      SOLANA VALIDATOR                        │
+│   Banking threads ─┬─ update_account()  ──┐                  │
+│   Replay thread  ──┼─ update_slot_status()┼──▶ geyser-tap    │
+│                    └─ notify_transaction()┘                  │
+└───────────────────────────────┬──────────────────────────────┘
+                                │  filter, serialize, try_send
+                    ┌───────────▼───────────┐
+                    │    Bounded channel    │  drop-on-full
+                    └───────────┬───────────┘
                                 │
-              ┌─────────────────┼─────────────────┐
-              │   Bounded Channel (100k msgs)     │
-              └─────────────────┬─────────────────┘
-                                │
-              ┌─────────────────┴─────────────────┐
-              │          Plugin Runtime           │
-              │  ┌─────────┐ ┌────────┐ ┌───────┐ │
-              │  │gRPC Sink│ │WS Sink │ │ Kafka │ │
-              │  └────┬────┘ └───┬────┘ └───┬───┘ │
-              └───────┼──────────┼──────────┼─────┘
-                      │          │          │
-              ┌───────┴──┐ ┌─────┴────┐ ┌───┴─────────┐
-              │ gRPC     │ │ WS       │ │ Kafka Broker│
-              │ clients  │ │ clients  │ │ (untested)  │
-              └──────────┘ └──────────┘ └─────────────┘
+                    ┌───────────▼───────────┐
+                    │    Plugin runtime     │  (tokio, own threads)
+                    │  ┌──────┐┌────┐┌────┐ │
+                    │  │ gRPC ││ WS ││Kafka│ │
+                    │  └───┬──┘└─┬──┘└──┬─┘ │
+                    └──────┼─────┼──────┼───┘
+                           ▼     ▼      ▼
+                       clients  clients  broker
 ```
 
-### A note on `panic`
+The validator's callbacks are synchronous and must return fast. Everything expensive happens on the other side of a bounded channel, on threads geyser-tap owns. When that channel is full, updates are dropped and counted — never queued without limit, never blocking.
 
-The release profile uses `panic = "unwind"`, **not** `abort`. Under
-`panic = "abort"` there is no unwinding at all, so the `catch_unwind` wrapping
-every validator callback cannot catch anything and a plugin panic takes the
-validator down -- which silently made the panic-isolation guarantee false.
-Unwinding stays confined to the plugin: `catch_unwind` sits immediately inside
-each `extern "C"` callback, so no panic reaches the FFI boundary.
+Full design notes: [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md). Decision records: [docs/adr](docs/adr).
 
-## Features
+---
 
-- **gRPC streaming**: server-push updates to connected clients (verified)
-- **WebSocket streaming**: JSON updates for consumers that cannot speak gRPC (verified)
-- **Kafka publishing**: durable, replayable event log (implemented, not yet exercised against a broker)
-- **Per-type filtering**: subscribe to accounts, transactions, slots, entries, block metadata
-- **Account filters**: filter by owner program or pubkey
-- **Backpressure**: drops updates rather than blocking the validator
-- **Prometheus metrics**: `/metrics` exposition plus `/health/live` and
-  `/health/ready` endpoints (verified)
+## Key design decisions
 
-## Quick Start
+**Panic isolation is real, and it depends on `panic = "unwind"`.**
+Every validator callback is wrapped in `catch_unwind`. This only works under `panic = "unwind"`; with `panic = "abort"` there is no unwinding, the wrapper is inert, and a plugin panic aborts the validator outright. The two settings are mutually exclusive. Unwinding never crosses the C-ABI boundary because `catch_unwind` sits immediately inside each `extern "C"` callback.
 
-### 1. Build
+**The Rust version is an exact requirement, not a minimum.**
+`_create_plugin` returns `*mut dyn GeyserPlugin` — a trait-object fat pointer whose vtable layout Rust does not guarantee across compiler versions. A plugin built with a different rustc than the validator segfaults it on load, with no error message. `solana-test-validator 1.18.26` is built with rustc 1.75.0, so `rust-toolchain.toml` and the Dockerfile pin exactly that. `Cargo.lock` is committed and load-bearing: building under 1.75 requires holding several transitive dependencies below their current releases.
+
+**Back-pressure drops rather than blocks.**
+A slow consumer must never become a validator problem. The channel between callbacks and sinks is bounded and uses `try_send`; on failure the update is dropped and a counter incremented. Operators who need durability should use the Kafka sink, which has its own.
+
+**Filtering happens as early as possible.**
+Plugin-level filters are applied inside the callback, before anything is copied or enqueued. Per-subscriber filters are applied server-side during fan-out, so a narrow subscriber doesn't pay for traffic it would discard.
+
+**Payloads are copied once, then shared.**
+Validator-supplied buffers are only valid for the duration of the call, so payloads are serialized where they arrive. They are stored in `bytes::Bytes` so every subsequent clone through the fan-out is a refcount bump rather than a copy.
+
+---
+
+## Quick start
+
+### Build
+
+Requires **Rust 1.75.0** (pinned automatically by `rust-toolchain.toml`), `protoc`, and `cmake` for rdkafka.
 
 ```bash
-# Prerequisites: Rust 1.75.0 (exactly), protoc, cmake (for rdkafka)
-
 git clone https://github.com/sabijuraa/geyser-tap.git
 cd geyser-tap
-
-# Build release binary. rust-toolchain.toml pins 1.75.0 automatically.
 cargo build --release
-
-# The plugin is at: target/release/libgeyser_tap_plugin.so
+# → target/release/libgeyser_tap_plugin.so
 ```
 
-> **The Rust version is not a minimum, it is an exact requirement.**
-> `_create_plugin` returns `*mut dyn GeyserPlugin`, a trait-object fat pointer
-> handed across `dlopen`. Rust vtable layout is not ABI-stable between compiler
-> versions, so a plugin built with a rustc other than the validator's
-> **segfaults the validator on load**. Validator 1.18.26 is built with rustc
-> 1.75.0. Building with 1.82 or 1.88 was measured to crash it; see
-> [BLOCKERS.md](BLOCKERS.md).
->
-> `Cargo.lock` is committed and load-bearing: building under 1.75 requires
-> holding several transitive dependencies below their current releases.
-
-### 2. Configure
-
-Create `config.json`:
+### Configure
 
 ```json
 {
-  "libpath": "/path/to/libgeyser_tap_plugin.so",
-  
+  "libpath": "/opt/geyser-tap/libgeyser_tap_plugin.so",
+
   "grpc": {
     "enabled": true,
     "bind_address": "0.0.0.0:10000",
-    "max_connections": 100
-  },
-  
-  "kafka": {
-    "enabled": true,
-    "brokers": "localhost:9092",
-    "topic": "solana-updates",
-    "producer": {
-      "compression": "zstd"
+    "max_connections": 100,
+    "filters": {
+      "include_votes": false,
+      "update_types": {
+        "accounts": true,
+        "transactions": true,
+        "slots": true,
+        "entries": false,
+        "block_metadata": true
+      }
     }
   },
-  
-  "plugin": {
-    "channel_capacity": 100000
-  },
-  
-  "metrics": {
-    "enabled": true,
-    "bind_address": "127.0.0.1:9090"
-  }
+
+  "plugin": { "channel_capacity": 100000, "worker_threads": 4 },
+  "metrics": { "enabled": true, "bind_address": "127.0.0.1:9090" }
 }
 ```
 
-### 3. Run Validator with Plugin
+See [config.example.json](config.example.json) for every option, including Kafka and WebSocket.
+
+### Run
 
 ```bash
-solana-validator \
-  --geyser-plugin-config /path/to/config.json \
-  ... # other validator flags
+solana-validator --geyser-plugin-config /path/to/config.json  # ...other flags
 ```
 
-The validator binary must match `solana-geyser-plugin-interface` in
-`Cargo.toml` (currently 1.18). A validator from a different interface major
-version -- Agave 4.x, for example -- will segfault on load.
+The validator must match `solana-geyser-plugin-interface` (currently 1.18) and have been built with the same rustc. A validator from a different interface major version — Agave 4.x, say — segfaults on load.
 
-### 4. Connect Clients
+### Consume
 
-**gRPC (Rust, via the SDK):**
+**Rust, via the bundled SDK:**
+
 ```rust
 use geyser_tap_sdk::{GeyserClient, SubscriptionBuilder};
 
@@ -184,277 +144,140 @@ let subscription = SubscriptionBuilder::new()
 
 let mut stream = client.subscribe(subscription).await?;
 while let Some(update) = stream.next().await {
-    println!("Update: {:?}", update?);
+    println!("{:?}", update?);
 }
 ```
 
-A runnable version is in `crates/sdk/examples/consume.rs`; it is the consumer
-used for the end-to-end verification:
+A runnable version:
 
 ```bash
 cargo run --release -p geyser-tap-sdk --example consume -- http://127.0.0.1:10000 30
 ```
 
-**WebSocket:** connect to `ws://localhost:10001` and read JSON frames, e.g.
-`{"type":"entry","slot":57,"data":{...}}`. Note that the WebSocket sink has no
-per-client filtering yet: every connected client receives the full configured
-stream.
+**WebSocket:** connect to `ws://localhost:10001` and read JSON frames such as `{"type":"entry","slot":57,"data":{…}}`. This sink has no per-client filtering — every client receives the full configured stream.
 
-**Kafka:**
+**Kafka:** consume the configured topics, or check them with the bundled verifier:
+
 ```bash
-# Using kafkacat
-kafkacat -b localhost:9092 -t solana-updates -C
+cargo run --release -p geyser-tap-sink-kafka --example verify_topic -- \
+    localhost:9092 solana-transactions 5
 ```
 
-## Project Structure
+---
 
-```
-geyser-tap/
-├── Cargo.toml              # Workspace root
-├── SYSTEM_DESIGN.md        # Architecture documentation
-├── crates/
-│   ├── plugin/             # Main Geyser plugin (cdylib)
-│   │   └── src/
-│   │       ├── lib.rs      # Plugin entry point
-│   │       ├── ffi.rs      # FFI-safe GeyserPlugin impl
-│   │       ├── runtime.rs  # Async runtime bridge
-│   │       └── state.rs    # Thread-safe state
-│   ├── sink-grpc/          # gRPC sink
-│   │   └── src/
-│   │       ├── broadcaster.rs  # Fan-out to clients
-│   │       ├── server.rs       # tonic gRPC server
-│   │       └── service.rs      # Service implementation
-│   ├── sink-kafka/         # Kafka sink
-│   │   └── src/
-│   │       ├── producer.rs     # rdkafka wrapper
-│   │       ├── partitioner.rs  # Partitioning strategy
-│   │       └── serializer.rs   # Protobuf encoding
-│   ├── sink-ws/            # WebSocket sink
-│   │   └── src/
-│   │       ├── server.rs       # tokio-tungstenite server
-│   │       └── client.rs       # Connected client tracking
-│   ├── sdk/                # Rust client SDK
-│   │   ├── src/
-│   │   │   ├── client.rs       # GeyserClient
-│   │   │   └── subscription.rs # SubscriptionBuilder
-│   │   └── examples/
-│   │       └── consume.rs      # End-to-end consumer
-│   ├── common/             # Shared types and traits
-│   │   ├── tests/
-│   │   │   └── integration.rs  # Integration tests
-│   │   └── src/
-│   │       ├── sink.rs     # Sink trait
-│   │       ├── types.rs    # Update types
-│   │       ├── config.rs   # Configuration
-│   │       ├── error.rs    # Error types
-│   │       └── metrics.rs  # Prometheus metrics
-│   └── proto/              # Protobuf definitions
-│       ├── build.rs        # tonic-build: generates the service layer
-│       └── src/
-│           └── geyser.proto
-└── docs/
-    └── adr/                # Architecture Decision Records
-        ├── 001-ffi-safety-model.md
-        ├── 002-sink-abstraction.md
-        ├── 003-backpressure-strategy.md
-        ├── 004-serialization-format.md
-        └── 005-thread-safety.md
-```
-
-## Configuration Reference
-
-See [config.example.json](config.example.json) for full options.
+## Configuration reference
 
 | Section | Key | Default | Description |
 |---------|-----|---------|-------------|
 | `grpc` | `enabled` | `false` | Enable gRPC streaming |
-| `grpc` | `bind_address` | `0.0.0.0:10000` | gRPC server address |
-| `grpc` | `max_connections` | `100` | Max concurrent clients |
+| `grpc` | `bind_address` | `0.0.0.0:10000` | gRPC listen address |
+| `grpc` | `max_connections` | `100` | Concurrent subscriber cap |
+| `websocket` | `enabled` | `false` | Enable WebSocket streaming |
+| `websocket` | `bind_address` | `0.0.0.0:10001` | WebSocket listen address |
 | `kafka` | `enabled` | `false` | Enable Kafka publishing |
-| `kafka` | `brokers` | - | Kafka broker list |
-| `kafka` | `topic` | - | Default topic |
+| `kafka` | `brokers` | — | Broker list (required when enabled) |
+| `kafka` | `topic` | — | Default topic |
 | `kafka.producer` | `acks` | `all` | Required by the idempotent producer |
 | `kafka.producer` | `compression` | `zstd` | Compression codec |
-| `plugin` | `channel_capacity` | `100000` | Internal buffer size |
-| `metrics` | `enabled` | `true` | Enable Prometheus |
-| `metrics` | `bind_address` | `127.0.0.1:9090` | Metrics endpoint |
+| `plugin` | `channel_capacity` | `100000` | Bounded channel size |
+| `plugin` | `worker_threads` | `4` | Runtime worker threads |
+| `metrics` | `enabled` | `true` | Serve metrics and health |
+| `metrics` | `bind_address` | `127.0.0.1:9090` | Metrics listen address |
+
+A disabled sink still has its config block validated, so `kafka` requires `brokers` even when `enabled` is `false`. Omit the block entirely instead.
+
+---
 
 ## Metrics and health
 
-The plugin serves three endpoints on `metrics.bind_address` (default
-`127.0.0.1:9090`):
+Three endpoints are served on `metrics.bind_address`:
 
 | Path | Purpose |
 |------|---------|
-| `/metrics` | Prometheus text exposition (`version=0.0.4`) |
+| `/metrics` | Prometheus text exposition |
 | `/health/live` | 200 once the server is accepting connections |
-| `/health/ready` | 200 after the sinks have started, 503 before |
+| `/health/ready` | 200 after sinks have started, 503 before |
 
-Liveness and readiness differ deliberately: the exporter binds before the
-sinks come up, so `/health/live` answers during startup while `/health/ready`
-stays 503 until the sinks are running. A failure to bind the metrics server is
-logged and the plugin continues without it, rather than failing `on_load` --
-losing observability should not take down a validator.
+Liveness and readiness are deliberately distinct: the exporter binds before the sinks come up, so `/health/live` answers during startup while `/health/ready` stays 503 until traffic can actually be served. If the metrics server itself fails to bind, that is logged and the plugin continues — losing observability should not take down a validator.
 
-```bash
-curl -s http://127.0.0.1:9090/metrics | grep updates_received
-# geyser_tap_updates_received_total{type="account"} 928
-# geyser_tap_updates_received_total{type="transaction"} 101
-```
-
-All metrics use the `geyser_tap_` prefix:
+All metrics carry the `geyser_tap_` prefix:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `updates_received_total` | Counter | Updates from validator |
-| `updates_sent_total` | Counter | Updates to sinks |
-| `updates_dropped_total` | Counter | Dropped due to backpressure |
-| `channel_depth` | Gauge | Current channel utilization |
-| `sink_latency_seconds` | Histogram | Sink send latency |
-| `grpc_clients` | Gauge | Connected gRPC clients |
-| `current_slot` | Gauge | Latest slot processed |
+| `updates_received_total{type}` | Counter | Updates received from the validator |
+| `updates_sent_total{sink,type}` | Counter | Updates delivered to a sink |
+| `updates_dropped_total{sink}` | Counter | Updates dropped under back-pressure |
+| `channel_depth` / `channel_capacity` | Gauge | Bounded channel utilisation |
+| `sink_latency_seconds{sink}` | Histogram | Sink send latency |
+| `sink_health{sink}` | Gauge | 1 healthy, 0 unhealthy |
+| `current_slot` | Gauge | Most recent slot seen |
+| `grpc_clients` | Gauge | Connected gRPC subscribers |
 
-Drop rate over 5 minutes:
 ```promql
+# Drop rate over 5 minutes
 rate(geyser_tap_updates_dropped_total[5m])
-/ rate(geyser_tap_updates_received_total[5m])
+  / rate(geyser_tap_updates_received_total[5m])
 ```
+
+---
+
+## Layout
+
+```
+crates/
+  plugin/        cdylib loaded by the validator: FFI boundary, state, runtime bridge
+  common/        update types, Sink trait, config, errors, metrics + exporter
+  proto/         protobuf schema; build.rs generates the tonic service layer
+  sink-grpc/     tonic server and per-subscriber fan-out
+  sink-kafka/    rdkafka producer and partitioning
+  sink-ws/       tokio-tungstenite server
+  sdk/           Rust client for the gRPC stream
+docs/adr/        architecture decision records
+```
+
+---
 
 ## Development
 
-### Prerequisites
-
-- Rust 1.75.0 exactly (pinned by `rust-toolchain.toml`; see the warning above)
-- `protoc` (Protocol Buffers compiler) - required, `crates/proto/build.rs`
-  generates the tonic service layer
-- `cmake` (for rdkafka)
-- A `solana-test-validator` matching the plugin interface version, for
-  end-to-end runs
-
-### Build Commands
-
 ```bash
-# Debug build
-cargo build
-
-# Release build (required for validator)
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run clippy
+cargo build --release      # release build (required for the validator)
+cargo test                 # 36 tests
 cargo clippy --all-targets
-
-# Format check
 cargo fmt --check
 ```
 
-### End-to-end run
-
-`cargo test` covers the in-process tests only; it does not exercise the
-validator FFI boundary. To check the real path, run a validator with the
-plugin and attach the SDK consumer:
+`cargo test` covers in-process behaviour only; it does not cross the validator FFI boundary. To exercise the real path, run a matching validator with the plugin and attach a consumer:
 
 ```bash
 cargo build --release -p geyser-tap-plugin
+solana-test-validator --ledger /tmp/gt-ledger --geyser-plugin-config test-config.json &
 
-<path-to-1.18.26>/solana-test-validator \
-  --ledger /tmp/gt-ledger \
-  --geyser-plugin-config test-config.json &
-
-ss -ltn | grep -E ':10000|:10001'    # both sinks should be listening
+ss -ltn | grep -E ':10000|:10001'   # sinks listening
 cargo run --release -p geyser-tap-sdk --example consume -- http://127.0.0.1:10000 30
 ```
 
-To exercise the Kafka sink, point `kafka.brokers` at a broker and read the
-messages back:
+`docker-compose.yml` brings up Kafka, Prometheus and Grafana for local work. `config/prometheus.yml` is gitignored, so create it before starting the stack.
 
-```bash
-cargo run --release -p geyser-tap-sink-kafka --example verify_topic -- \
-  localhost:9092 solana-transactions 5
-```
-
-`docker-compose.yml` provides a Kafka service; `config/prometheus.yml` is
-gitignored, so the compose stack needs it created locally first.
-
-## Deployment Checklist
-
-- [ ] Build with `--release` profile
-- [ ] Build with the **exact** rustc the target validator was built with
-- [ ] Verify `panic = "unwind"` in Cargo.toml (`abort` disables panic isolation)
-- [ ] Test with validator on devnet first
-- [ ] Configure alerts on `geyser_tap_updates_dropped_total` and scrape
-      `/metrics`; wire `/health/ready` into your orchestrator
-- [ ] Set appropriate `channel_capacity` for your load
-- [ ] Monitor memory usage (should stay bounded)
-- [ ] Test graceful shutdown with `on_unload`
+---
 
 ## Troubleshooting
 
-### Validator segfaults on startup
+**The validator segfaults on startup.** Almost always one of three things, none of which produce a useful error message:
 
-```
-Starting GeyserPluginService from config files: [...]
-Segmentation fault (core dumped)
-```
+1. **rustc mismatch** — the plugin must be built with the validator's exact compiler. Read the validator's with `strings <validator-binary> | grep -o '/rustc/[a-f0-9]*'`.
+2. **Wrong validator** — confirm the binary matches `solana-geyser-plugin-interface`, not just whatever is on `PATH`.
+3. **Invalid config** — an error returned from `on_load` is a boxed trait object whose vtable lives in the library the validator has just unloaded, so a config mistake can surface as a crash. A `kafka` block with `enabled: false` but no `brokers` does exactly this.
 
-This is the most common failure and it is almost never a symbol problem.
-Check, in order:
+**The plugin loads but logs nothing.** Expected. `solana_logger` installs the global `log` logger during validator startup, so the plugin's `tracing_subscriber` initialisation is a no-op and its output is discarded. Use the metrics endpoint to confirm the plugin is live.
 
-1. **rustc mismatch.** The plugin must be built with the same rustc as the
-   validator. Find the validator's:
-   `strings <validator-binary> | grep -o '/rustc/[a-f0-9]*'`
-2. **Wrong validator.** Confirm the binary you are running matches
-   `solana-geyser-plugin-interface`, not just whatever is on `PATH`.
-3. **Invalid config.** Any error returned from `on_load` can surface as a
-   segfault rather than a message, because the error is a boxed trait object
-   whose vtable lives in the library the validator has just unloaded. A
-   `kafka` block with `enabled: false` but no `brokers` field does this.
+**Updates are being dropped.** Check `geyser_tap_updates_dropped_total`. Either raise `channel_capacity` (costs memory), or find the slow sink via `sink_latency_seconds`.
 
-Full write-up in [BLOCKERS.md](BLOCKERS.md).
-
-### Plugin appears loaded but produces no logs
-
-Expected. `solana_logger` installs the global `log` logger during validator
-startup, so the plugin's `tracing_subscriber` init is a no-op and all plugin
-`tracing` output is discarded.
-
-### Updates being dropped
-
-Check the metrics endpoint:
-```bash
-curl -s http://127.0.0.1:9090/metrics | grep dropped
-```
-
-If `geyser_tap_updates_dropped_total` is increasing:
-1. Increase `channel_capacity` (uses more memory)
-2. Add more Kafka brokers / gRPC clients
-3. Check if downstream is healthy
-
-### High memory usage
-
-Memory is bounded by:
-- Channel: `channel_capacity * ~1KB`
-- Per-client gRPC buffers: `max_connections * send_buffer_size * ~1KB`
-- Kafka queue: `queue.buffering.max.kbytes`
-
-Reduce these if memory is constrained.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Write tests
-4. Ensure CI passes
-5. Open a pull request
+---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- [Solana Labs](https://github.com/solana-labs/solana) for the Geyser plugin interface
-- [Jito Labs](https://github.com/jito-foundation) for geyser-grpc inspiration
-- [Triton One](https://github.com/rpcpool) for yellowstone-grpc reference
+Built against the [Solana](https://github.com/solana-labs/solana) Geyser plugin interface, with reference to [Jito](https://github.com/jito-foundation) and [Triton One's yellowstone-grpc](https://github.com/rpcpool/yellowstone-grpc).

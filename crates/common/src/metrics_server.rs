@@ -139,9 +139,7 @@ pub async fn start(bind_address: SocketAddr, readiness: Readiness) -> std::io::R
 
     let make_svc = make_service_fn(move |_conn| {
         let readiness = readiness.clone();
-        async move {
-            Ok::<_, Infallible>(service_fn(move |req| route(req, readiness.clone())))
-        }
+        async move { Ok::<_, Infallible>(service_fn(move |req| route(req, readiness.clone()))) }
     });
 
     let server = builder.serve(make_svc);

@@ -202,10 +202,7 @@ mod tests {
 
     #[test]
     fn into_request() {
-        let sub = SubscriptionBuilder::new()
-            .slots()
-            .block_metadata()
-            .build();
+        let sub = SubscriptionBuilder::new().slots().block_metadata().build();
 
         let request = sub.into_request();
         assert!(request.slots);

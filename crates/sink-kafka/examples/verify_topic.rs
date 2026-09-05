@@ -7,6 +7,11 @@
 //!     localhost:9092 solana-transactions 5
 //! ```
 
+// This is a command-line example: stdout is the output. The workspace
+// lint against println! exists to keep it out of the plugin, which logs
+// through tracing because it runs inside the validator process.
+#![allow(clippy::disallowed_methods)]
+
 use prost::Message;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::{ClientConfig, Message as _};

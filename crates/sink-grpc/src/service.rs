@@ -24,7 +24,8 @@ use tonic::{Request, Response, Status};
 pub type StreamResult<T> = Result<Response<T>, Status>;
 
 /// The stream type returned by Subscribe.
-pub type UpdateStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<geyser::StreamUpdate, Status>> + Send>>;
+pub type UpdateStream =
+    Pin<Box<dyn tokio_stream::Stream<Item = Result<geyser::StreamUpdate, Status>> + Send>>;
 
 /// Implementation of the GeyserStream gRPC service.
 pub struct GeyserService {
@@ -155,7 +156,8 @@ impl GeyserService {
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
 
-            let proto_update = geyser_tap_proto::convert::to_stream_update(&update, seq, timestamp_ns);
+            let proto_update =
+                geyser_tap_proto::convert::to_stream_update(&update, seq, timestamp_ns);
             Ok(proto_update)
         })
     }

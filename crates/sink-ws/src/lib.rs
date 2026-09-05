@@ -6,8 +6,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs, rust_2018_idioms)]
 
-mod server;
 mod client;
+mod server;
 
 pub use server::{WsServer, WsServerConfig};
 

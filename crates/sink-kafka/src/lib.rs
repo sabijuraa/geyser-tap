@@ -43,8 +43,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs, rust_2018_idioms)]
 
-pub mod producer;
 pub mod partitioner;
+pub mod producer;
 pub mod serializer;
 
 pub use producer::KafkaProducer;

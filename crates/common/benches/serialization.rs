@@ -56,6 +56,13 @@ fn bench_update_clone(c: &mut Criterion) {
         b.iter(|| black_box(large_account.clone()))
     });
 
+    // Transaction (2KB payload) - the hot path in practice
+    let transaction = create_transaction_update(2048);
+    group.throughput(Throughput::Bytes(2048));
+    group.bench_function("transaction_2kb", |b| {
+        b.iter(|| black_box(transaction.clone()))
+    });
+
     // Slot update (minimal)
     let slot = create_slot_update();
     group.throughput(Throughput::Elements(1));

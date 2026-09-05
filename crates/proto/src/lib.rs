@@ -320,8 +320,8 @@ pub mod convert {
     use super::geyser;
     use bytes::Bytes;
     use geyser_tap_common::{
-        AccountUpdate, BlockMetadataUpdate, EntryUpdate, SlotStatus, SlotUpdate,
-        TransactionUpdate, Update,
+        AccountUpdate, BlockMetadataUpdate, EntryUpdate, SlotStatus, SlotUpdate, TransactionUpdate,
+        Update,
     };
 
     impl From<&AccountUpdate> for geyser::AccountUpdate {
@@ -335,9 +335,7 @@ pub mod convert {
                 rent_epoch: update.rent_epoch,
                 executable: update.executable,
                 write_version: update.write_version,
-                txn_signature: update
-                    .txn_signature
-                    .map(|s| Bytes::copy_from_slice(&s)),
+                txn_signature: update.txn_signature.map(|s| Bytes::copy_from_slice(&s)),
             }
         }
     }
@@ -401,7 +399,11 @@ pub mod convert {
     }
 
     /// Convert an internal Update to a protobuf StreamUpdate.
-    pub fn to_stream_update(update: &Update, sequence: u64, timestamp_ns: u64) -> geyser::StreamUpdate {
+    pub fn to_stream_update(
+        update: &Update,
+        sequence: u64,
+        timestamp_ns: u64,
+    ) -> geyser::StreamUpdate {
         let payload = match update {
             Update::Account(u) => geyser::UpdatePayload::Account(u.into()),
             Update::Transaction(u) => geyser::UpdatePayload::Transaction(u.into()),

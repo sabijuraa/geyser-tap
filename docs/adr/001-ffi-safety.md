@@ -1,15 +1,5 @@
 # ADR-001: FFI Safety Model
 
-> **Superseded 2026-09-05 on the `panic` setting.** The release profile now
-> uses `panic = "unwind"`. `panic = "abort"` is not a backstop or
-> defense-in-depth for `catch_unwind` -- it *disables* it. With unwinding off,
-> `catch_unwind` can never catch a panic, so every callback wrapper was inert
-> and a plugin panic aborted the validator outright. The two settings are
-> mutually exclusive; panic isolation requires `unwind`. Unwinding stays
-> confined to the plugin because `catch_unwind` sits immediately inside each
-> `extern "C"` callback. The rest of this ADR still stands. See
-> VERIFICATION.md (FR6).
-
 ## Status
 Accepted
 
@@ -27,7 +17,7 @@ Every callback from the validator is wrapped in std::panic::catch_unwind. The wr
 4. Logs the panic with full context (callback name, panic message if available)
 5. Returns a GeyserPluginError instead of unwinding
 
-Additionally, the release profile sets panic = "abort" as a defense-in-depth measure. This means any panic that somehow escapes catch_unwind will abort the process rather than causing undefined behavior. In practice, catch_unwind should catch everything, but abort provides a defined failure mode.
+The release profile must use panic = "unwind". This is not a preference: catch_unwind can only catch an unwinding panic, so under panic = "abort" the wrapper is inert and any plugin panic aborts the validator outright. The two settings are mutually exclusive, and panic isolation requires unwinding. Unwinding never reaches the C-ABI boundary because catch_unwind sits immediately inside each extern "C" callback.
 
 All unsafe blocks in the codebase are documented with their invariants. Currently, the only unsafe block is the CStr::from_ptr call when converting the config path from C string, and it documents the invariant that the validator provides a valid null-terminated string.
 
@@ -42,7 +32,7 @@ All unsafe blocks in the codebase are documented with their invariants. Currentl
 **Negative:**
 - catch_unwind has a small runtime cost (though minimal in practice)
 - Some types cannot be safely moved across unwind boundaries (we use AssertUnwindSafe where necessary, after verifying the safety)
-- panic = "abort" means we lose the ability to use panic for non-fatal assertions during development
+- panic = "unwind" means the plugin carries unwinding tables, costing some binary size
 
 **Trade-off accepted:**
 The small performance and ergonomic costs are worth the safety guarantee. A production validator cannot have a plugin that might crash it.

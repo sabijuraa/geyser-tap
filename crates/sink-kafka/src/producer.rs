@@ -93,12 +93,10 @@ impl KafkaProducer {
             client_config.set("sasl.password", &sasl.password);
         }
 
-        let producer = client_config
-            .create()
-            .map_err(|e| SinkError::Connection {
-                endpoint: config.brokers.clone(),
-                message: e.to_string(),
-            })?;
+        let producer = client_config.create().map_err(|e| SinkError::Connection {
+            endpoint: config.brokers.clone(),
+            message: e.to_string(),
+        })?;
 
         Ok(Self {
             producer,
@@ -128,9 +126,7 @@ impl KafkaProducer {
         let key = self.partitioner.key_for_update(update);
 
         // Create the record
-        let record = FutureRecord::to(topic)
-            .key(&key)
-            .payload(&payload);
+        let record = FutureRecord::to(topic).key(&key).payload(&payload);
 
         // Send with timeout
         let start = std::time::Instant::now();
@@ -144,12 +140,7 @@ impl KafkaProducer {
 
         match result {
             Ok((partition, offset)) => {
-                tracing::trace!(
-                    topic,
-                    partition,
-                    offset,
-                    "Message sent to Kafka"
-                );
+                tracing::trace!(topic, partition, offset, "Message sent to Kafka");
                 Ok(())
             }
             Err((err, _)) => {
@@ -173,12 +164,10 @@ impl KafkaProducer {
         let producer = self.producer.clone();
         let timeout = Duration::from_secs(30);
 
-        tokio::task::spawn_blocking(move || {
-            producer.flush(Timeout::After(timeout))
-        })
-        .await
-        .map_err(|e| SinkError::Send(format!("Flush task failed: {e}")))?
-        .map_err(|e| SinkError::Kafka(format!("Flush failed: {e:?}")))
+        tokio::task::spawn_blocking(move || producer.flush(Timeout::After(timeout)))
+            .await
+            .map_err(|e| SinkError::Send(format!("Flush task failed: {e}")))?
+            .map_err(|e| SinkError::Kafka(format!("Flush failed: {e:?}")))
     }
 
     /// Shutdown the producer.
@@ -198,8 +187,6 @@ impl KafkaProducer {
 
 #[cfg(test)]
 mod tests {
-    
-    
 
     // Note: Integration tests would require a Kafka broker
 }

@@ -31,8 +31,8 @@
 use crate::runtime::PluginRuntime;
 use crate::state::PluginState;
 use geyser_tap_common::{
-    AccountUpdate, BlockMetadataUpdate, EntryUpdate,
-    PluginConfig, Sink, SlotStatus, SlotUpdate, TransactionUpdate, Update,
+    AccountUpdate, BlockMetadataUpdate, EntryUpdate, PluginConfig, Sink, SlotStatus, SlotUpdate,
+    TransactionUpdate, Update,
 };
 use geyser_tap_sink_grpc::GrpcSink;
 use geyser_tap_sink_kafka::KafkaSink;
@@ -138,7 +138,9 @@ impl GeyserTapPlugin {
     }
 
     /// Create sinks based on configuration.
-    fn create_sinks(config: &PluginConfig) -> Result<Vec<Box<dyn Sink>>, geyser_tap_common::GeyserTapError> {
+    fn create_sinks(
+        config: &PluginConfig,
+    ) -> Result<Vec<Box<dyn Sink>>, geyser_tap_common::GeyserTapError> {
         let mut sinks: Vec<Box<dyn Sink>> = Vec::new();
 
         // Create gRPC sink if enabled
@@ -224,29 +226,29 @@ impl GeyserPlugin for GeyserTapPlugin {
 
         // Create runtime
         let mut runtime = PluginRuntime::new(&config).map_err(|e| {
-            GeyserPluginError::Custom(Box::new(std::io::Error::other(
-                format!("failed to create runtime: {e}"),
-            )))
+            GeyserPluginError::Custom(Box::new(std::io::Error::other(format!(
+                "failed to create runtime: {e}"
+            ))))
         })?;
 
         // Create sinks based on configuration
         let sinks = Self::create_sinks(&config).map_err(|e| {
-            GeyserPluginError::Custom(Box::new(std::io::Error::other(
-                format!("failed to create sinks: {e}"),
-            )))
+            GeyserPluginError::Custom(Box::new(std::io::Error::other(format!(
+                "failed to create sinks: {e}"
+            ))))
         })?;
 
         // Start runtime with sinks
         runtime.start(sinks).map_err(|e| {
-            GeyserPluginError::Custom(Box::new(std::io::Error::other(
-                format!("failed to start runtime: {e}"),
-            )))
+            GeyserPluginError::Custom(Box::new(std::io::Error::other(format!(
+                "failed to start runtime: {e}"
+            ))))
         })?;
 
         let state = PluginState::new(&config, runtime.sender()).map_err(|e| {
-            GeyserPluginError::Custom(Box::new(std::io::Error::other(
-                format!("failed to create state: {e}"),
-            )))
+            GeyserPluginError::Custom(Box::new(std::io::Error::other(format!(
+                "failed to create state: {e}"
+            ))))
         })?;
 
         // Store state
@@ -287,50 +289,53 @@ impl GeyserPlugin for GeyserTapPlugin {
             return Ok(());
         }
 
-        self.catch_panic("update_account", AssertUnwindSafe(|| {
-            let state = match self.state.read().as_ref() {
-                Some(s) => Arc::clone(s),
-                None => return Ok(()), // Plugin not initialized
-            };
+        self.catch_panic(
+            "update_account",
+            AssertUnwindSafe(|| {
+                let state = match self.state.read().as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return Ok(()), // Plugin not initialized
+                };
 
-            // Check filter
-            if !state.filter().update_types.accounts {
-                return Ok(());
-            }
-
-            // Extract account info (handle different versions)
-            let info = match account {
-                ReplicaAccountInfoVersions::V0_0_3(info) => info,
-                ReplicaAccountInfoVersions::V0_0_2(_info) => {
-                    // Older version not supported
+                // Check filter
+                if !state.filter().update_types.accounts {
                     return Ok(());
                 }
-                ReplicaAccountInfoVersions::V0_0_1(_info) => {
-                    return Ok(());
-                }
-            };
 
-            // Convert to our update type
-            let update = AccountUpdate {
-                pubkey: info.pubkey.try_into().unwrap_or([0u8; 32]),
-                data: Bytes::copy_from_slice(info.data),
-                slot,
-                owner: info.owner.try_into().unwrap_or([0u8; 32]),
-                lamports: info.lamports,
-                rent_epoch: info.rent_epoch,
-                executable: info.executable,
-                write_version: info.write_version,
-                txn_signature: info.txn.map(|t| {
-                    t.signature().as_ref().try_into().unwrap_or([0u8; 64])
-                }),
-            };
+                // Extract account info (handle different versions)
+                let info = match account {
+                    ReplicaAccountInfoVersions::V0_0_3(info) => info,
+                    ReplicaAccountInfoVersions::V0_0_2(_info) => {
+                        // Older version not supported
+                        return Ok(());
+                    }
+                    ReplicaAccountInfoVersions::V0_0_1(_info) => {
+                        return Ok(());
+                    }
+                };
 
-            // Send to runtime
-            state.send(Update::Account(update));
-            geyser_tap_common::metrics::record_update_received("account");
+                // Convert to our update type
+                let update = AccountUpdate {
+                    pubkey: info.pubkey.try_into().unwrap_or([0u8; 32]),
+                    data: Bytes::copy_from_slice(info.data),
+                    slot,
+                    owner: info.owner.try_into().unwrap_or([0u8; 32]),
+                    lamports: info.lamports,
+                    rent_epoch: info.rent_epoch,
+                    executable: info.executable,
+                    write_version: info.write_version,
+                    txn_signature: info
+                        .txn
+                        .map(|t| t.signature().as_ref().try_into().unwrap_or([0u8; 64])),
+                };
 
-            Ok(())
-        }))
+                // Send to runtime
+                state.send(Update::Account(update));
+                geyser_tap_common::metrics::record_update_received("account");
+
+                Ok(())
+            }),
+        )
     }
 
     fn notify_transaction(
@@ -338,64 +343,69 @@ impl GeyserPlugin for GeyserTapPlugin {
         transaction: ReplicaTransactionInfoVersions<'_>,
         slot: Slot,
     ) -> PluginResult<()> {
-        self.catch_panic("notify_transaction", AssertUnwindSafe(|| {
-            let state = match self.state.read().as_ref() {
-                Some(s) => Arc::clone(s),
-                None => return Ok(()),
-            };
+        self.catch_panic(
+            "notify_transaction",
+            AssertUnwindSafe(|| {
+                let state = match self.state.read().as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return Ok(()),
+                };
 
-            if !state.filter().update_types.transactions {
-                return Ok(());
-            }
-
-            let info = match transaction {
-                ReplicaTransactionInfoVersions::V0_0_2(info) => info,
-                ReplicaTransactionInfoVersions::V0_0_1(_info) => {
+                if !state.filter().update_types.transactions {
                     return Ok(());
                 }
-            };
 
-            // Check vote filter
-            if info.is_vote && !state.filter().include_votes {
-                return Ok(());
-            }
+                let info = match transaction {
+                    ReplicaTransactionInfoVersions::V0_0_2(info) => info,
+                    ReplicaTransactionInfoVersions::V0_0_1(_info) => {
+                        return Ok(());
+                    }
+                };
 
-            // Serialize the transaction to VersionedTransaction for downstream consumers.
-            // SanitizedTransaction can be converted to VersionedTransaction which implements Serialize.
-            let tx_data = match info.transaction.to_versioned_transaction().into_legacy_transaction() {
-                Some(legacy_tx) => {
-                    match bincode::serialize(&legacy_tx) {
+                // Check vote filter
+                if info.is_vote && !state.filter().include_votes {
+                    return Ok(());
+                }
+
+                // Serialize the transaction to VersionedTransaction for downstream consumers.
+                // SanitizedTransaction can be converted to VersionedTransaction which implements Serialize.
+                let tx_data = match info
+                    .transaction
+                    .to_versioned_transaction()
+                    .into_legacy_transaction()
+                {
+                    Some(legacy_tx) => match bincode::serialize(&legacy_tx) {
                         Ok(bytes) => Bytes::from(bytes),
                         Err(e) => {
                             tracing::warn!(error = %e, "Failed to serialize legacy transaction");
                             Bytes::new()
                         }
+                    },
+                    None => {
+                        // For versioned transactions, serialize the message hash as a fallback
+                        let hash = info.transaction.message_hash();
+                        Bytes::copy_from_slice(hash.as_ref())
                     }
-                }
-                None => {
-                    // For versioned transactions, serialize the message hash as a fallback
-                    let hash = info.transaction.message_hash();
-                    Bytes::copy_from_slice(hash.as_ref())
-                }
-            };
+                };
 
-            // Transaction status metadata - use None for now as the types don't support serde
-            let meta_bytes: Option<Bytes> = None;
+                // Transaction status metadata - use None for now as the types don't support serde
+                let meta_bytes: Option<Bytes> = None;
 
-            let update = TransactionUpdate {
-                signature: info.signature.as_ref().try_into().unwrap_or([0u8; 64]),
-                transaction_data: tx_data,
-                slot,
-                index: info.index as u64,
-                is_vote: info.is_vote,
-                meta: meta_bytes,
-            };
+                let update = TransactionUpdate {
+                    signature: info.signature.as_ref().try_into().unwrap_or([0u8; 64]),
+                    transaction_data: tx_data,
+                    slot,
+                    index: info.index as u64,
+                    is_vote: info.is_vote,
+                    meta: meta_bytes,
+                };
 
-            state.send(Update::Transaction(update));
-            geyser_tap_common::metrics::record_update_received("transaction");
+                state.send(Update::Transaction(update));
+                geyser_tap_common::metrics::record_update_received("transaction");
 
-            Ok(())
-        }))
+                Ok(())
+            }),
+        )
     }
 
     fn update_slot_status(
@@ -404,112 +414,121 @@ impl GeyserPlugin for GeyserTapPlugin {
         parent: Option<Slot>,
         status: SolanaSlotStatus,
     ) -> PluginResult<()> {
-        self.catch_panic("update_slot_status", AssertUnwindSafe(|| {
-            let state = match self.state.read().as_ref() {
-                Some(s) => Arc::clone(s),
-                None => return Ok(()),
-            };
+        self.catch_panic(
+            "update_slot_status",
+            AssertUnwindSafe(|| {
+                let state = match self.state.read().as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return Ok(()),
+                };
 
-            if !state.filter().update_types.slots {
-                return Ok(());
-            }
+                if !state.filter().update_types.slots {
+                    return Ok(());
+                }
 
-            let status = match status {
-                SolanaSlotStatus::Processed => SlotStatus::Processed,
-                SolanaSlotStatus::Rooted => SlotStatus::Rooted,
-                SolanaSlotStatus::Confirmed => SlotStatus::Confirmed,
-            };
+                let status = match status {
+                    SolanaSlotStatus::Processed => SlotStatus::Processed,
+                    SolanaSlotStatus::Rooted => SlotStatus::Rooted,
+                    SolanaSlotStatus::Confirmed => SlotStatus::Confirmed,
+                };
 
-            let update = SlotUpdate {
-                slot,
-                parent,
-                status,
-            };
+                let update = SlotUpdate {
+                    slot,
+                    parent,
+                    status,
+                };
 
-            state.send(Update::Slot(update));
-            geyser_tap_common::metrics::record_update_received("slot");
-            geyser_tap_common::metrics::set_current_slot(slot);
+                state.send(Update::Slot(update));
+                geyser_tap_common::metrics::record_update_received("slot");
+                geyser_tap_common::metrics::set_current_slot(slot);
 
-            Ok(())
-        }))
+                Ok(())
+            }),
+        )
     }
 
     fn notify_entry(&self, entry: ReplicaEntryInfoVersions<'_>) -> PluginResult<()> {
-        self.catch_panic("notify_entry", AssertUnwindSafe(|| {
-            let state = match self.state.read().as_ref() {
-                Some(s) => Arc::clone(s),
-                None => return Ok(()),
-            };
+        self.catch_panic(
+            "notify_entry",
+            AssertUnwindSafe(|| {
+                let state = match self.state.read().as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return Ok(()),
+                };
 
-            if !state.filter().update_types.entries {
-                return Ok(());
-            }
+                if !state.filter().update_types.entries {
+                    return Ok(());
+                }
 
-            let info = match entry {
-                ReplicaEntryInfoVersions::V0_0_2(info) => info,
-                ReplicaEntryInfoVersions::V0_0_1(_) => return Ok(()),
-            };
+                let info = match entry {
+                    ReplicaEntryInfoVersions::V0_0_2(info) => info,
+                    ReplicaEntryInfoVersions::V0_0_1(_) => return Ok(()),
+                };
 
-            // Entry data is the hash - transactions are sent separately via notify_transaction.
-            // We include the hash bytes as the entry data for downstream consumers.
-            let entry_data = Bytes::copy_from_slice(info.hash);
+                // Entry data is the hash - transactions are sent separately via notify_transaction.
+                // We include the hash bytes as the entry data for downstream consumers.
+                let entry_data = Bytes::copy_from_slice(info.hash);
 
-            let update = EntryUpdate {
-                slot: info.slot,
-                index: info.index as u64,
-                num_hashes: info.num_hashes,
-                hash: info.hash.try_into().unwrap_or([0u8; 32]),
-                entry_data,
-                executed_transaction_count: info.executed_transaction_count,
-            };
+                let update = EntryUpdate {
+                    slot: info.slot,
+                    index: info.index as u64,
+                    num_hashes: info.num_hashes,
+                    hash: info.hash.try_into().unwrap_or([0u8; 32]),
+                    entry_data,
+                    executed_transaction_count: info.executed_transaction_count,
+                };
 
-            state.send(Update::Entry(update));
-            geyser_tap_common::metrics::record_update_received("entry");
+                state.send(Update::Entry(update));
+                geyser_tap_common::metrics::record_update_received("entry");
 
-            Ok(())
-        }))
+                Ok(())
+            }),
+        )
     }
 
     fn notify_block_metadata(&self, blockinfo: ReplicaBlockInfoVersions<'_>) -> PluginResult<()> {
-        self.catch_panic("notify_block_metadata", AssertUnwindSafe(|| {
-            let state = match self.state.read().as_ref() {
-                Some(s) => Arc::clone(s),
-                None => return Ok(()),
-            };
+        self.catch_panic(
+            "notify_block_metadata",
+            AssertUnwindSafe(|| {
+                let state = match self.state.read().as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return Ok(()),
+                };
 
-            if !state.filter().update_types.block_metadata {
-                return Ok(());
-            }
-
-            let info = match blockinfo {
-                ReplicaBlockInfoVersions::V0_0_3(info) => info,
-                ReplicaBlockInfoVersions::V0_0_2(_info) => {
+                if !state.filter().update_types.block_metadata {
                     return Ok(());
                 }
-                ReplicaBlockInfoVersions::V0_0_1(_info) => {
-                    return Ok(());
-                }
-            };
 
-            let blockhash_bytes: [u8; 32] = bs58::decode(info.blockhash)
-                .into_vec()
-                .ok()
-                .and_then(|v| v.try_into().ok())
-                .unwrap_or([0u8; 32]);
+                let info = match blockinfo {
+                    ReplicaBlockInfoVersions::V0_0_3(info) => info,
+                    ReplicaBlockInfoVersions::V0_0_2(_info) => {
+                        return Ok(());
+                    }
+                    ReplicaBlockInfoVersions::V0_0_1(_info) => {
+                        return Ok(());
+                    }
+                };
 
-            let update = BlockMetadataUpdate {
-                slot: info.slot,
-                blockhash: blockhash_bytes,
-                block_time: info.block_time,
-                block_height: info.block_height,
-                rewards: None,
-            };
+                let blockhash_bytes: [u8; 32] = bs58::decode(info.blockhash)
+                    .into_vec()
+                    .ok()
+                    .and_then(|v| v.try_into().ok())
+                    .unwrap_or([0u8; 32]);
 
-            state.send(Update::BlockMetadata(update));
-            geyser_tap_common::metrics::record_update_received("block_metadata");
+                let update = BlockMetadataUpdate {
+                    slot: info.slot,
+                    blockhash: blockhash_bytes,
+                    block_time: info.block_time,
+                    block_height: info.block_height,
+                    rewards: None,
+                };
 
-            Ok(())
-        }))
+                state.send(Update::BlockMetadata(update));
+                geyser_tap_common::metrics::record_update_received("block_metadata");
+
+                Ok(())
+            }),
+        )
     }
 
     fn account_data_notifications_enabled(&self) -> bool {

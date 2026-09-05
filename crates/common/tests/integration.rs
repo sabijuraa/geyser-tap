@@ -45,7 +45,8 @@ fn test_config_validation() {
 /// A disabled Kafka sink still requires `brokers`, so a half-populated block
 /// fails to deserialize. This is the exact shape that used to crash the
 /// validator: on_load returned an error whose vtable lived in the library the
-/// validator had just unloaded. See BLOCKERS.md.
+/// validator had just unloaded. See SYSTEM_DESIGN.md, "Toolchain and ABI
+/// Compatibility".
 #[test]
 fn test_disabled_kafka_block_still_requires_brokers() {
     let json = r#"{

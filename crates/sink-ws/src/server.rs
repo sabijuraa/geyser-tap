@@ -1,9 +1,9 @@
 //! WebSocket server implementation.
 
 use crate::client::WsClient;
-use geyser_tap_common::{SinkError, SinkResult, Update, WsSinkConfig};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
+use geyser_tap_common::{SinkError, SinkResult, Update, WsSinkConfig};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,12 +84,12 @@ impl WsServer {
 
         let bind_addr = self.config.bind_address;
 
-        let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-            SinkError::Connection {
+        let listener = TcpListener::bind(bind_addr)
+            .await
+            .map_err(|e| SinkError::Connection {
                 endpoint: bind_addr.to_string(),
                 message: format!("failed to bind websocket listener: {e}"),
-            }
-        })?;
+            })?;
 
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         *self.shutdown_tx.write() = Some(shutdown_tx);

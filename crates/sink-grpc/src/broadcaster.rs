@@ -61,15 +61,11 @@ impl ClientFilter {
                     return false;
                 }
                 // Check owner filter
-                if !self.account_owners.is_empty()
-                    && !self.account_owners.contains(&u.owner)
-                {
+                if !self.account_owners.is_empty() && !self.account_owners.contains(&u.owner) {
                     return false;
                 }
                 // Check pubkey filter
-                if !self.account_pubkeys.is_empty()
-                    && !self.account_pubkeys.contains(&u.pubkey)
-                {
+                if !self.account_pubkeys.is_empty() && !self.account_pubkeys.contains(&u.pubkey) {
                     return false;
                 }
                 true

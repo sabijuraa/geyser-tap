@@ -151,12 +151,57 @@ where
     match std::panic::catch_unwind(f) {
         Ok(result) => result,
         Err(panic) => {
-            log::error!("Panic in {}: {:?}", context, panic);
+            tracing::error!("Panic in {}: {:?}", context, panic);
             Err(GeyserPluginError::Custom(...))
         }
     }
 }
 ```
+
+## Toolchain and ABI Compatibility
+
+The plugin's entry point is:
+
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin
+```
+
+Despite the `extern "C"`, the return type is a Rust trait object: a fat pointer
+carrying a data pointer and a vtable pointer. Rust does not guarantee a stable
+layout for vtables across compiler versions, so the validator and the plugin
+must agree on that layout. In practice this means **the plugin must be compiled
+with the same rustc version as the validator it is loaded into.**
+
+A mismatch does not produce a link error or a helpful message. The validator
+dereferences a vtable laid out differently from the one it expects and
+segfaults during `on_load`, before any plugin code has a chance to log
+anything.
+
+`solana-test-validator 1.18.26` is built with rustc 1.75.0. The rustc commit
+can be read out of any validator binary:
+
+```sh
+strings <validator-binary> | grep -o '/rustc/[a-f0-9]*'
+```
+
+`rust-toolchain.toml` pins the toolchain accordingly, and the Dockerfile pins
+the same version. `Cargo.lock` is committed because building under 1.75
+requires holding several transitive dependencies below their current releases,
+and those pins live only in the lockfile.
+
+Two related failure modes are worth knowing, because both present as a
+segfault rather than an error:
+
+- **Interface version drift.** The plugin targets
+  `solana-geyser-plugin-interface` 1.18. Loading it into a validator from a
+  different interface major version fails the same way.
+- **Errors returned from `on_load`.** `GeyserPluginError::Custom` carries a
+  `Box<dyn Error>` whose vtable lives inside the plugin. The validator's
+  load-failure path may drop the library before formatting that error,
+  dereferencing a vtable in an unloaded object. A configuration mistake can
+  therefore surface as a crash rather than a message, so config is validated
+  eagerly and kept simple.
 
 ## Zero-Copy Serialization Strategy
 
@@ -321,6 +366,85 @@ All metrics use `geyser_tap_` prefix:
 | `current_slot` | Gauge | Latest slot processed |
 | `grpc_clients` | Gauge | Connected gRPC clients |
 
+## Filtering
+
+Filtering happens at two levels, so work is avoided as early as possible.
+
+**Plugin-level.** Configured in JSON and applied inside the validator callback,
+before anything is copied or enqueued. An update type that no sink wants is
+never serialized and never occupies channel capacity. The plugin-level filter
+is the union of every enabled sink's filter.
+
+**Subscriber-level.** Each gRPC or WebSocket client supplies its own filter at
+subscription time, evaluated server-side in the fan-out stage so a narrow
+subscriber does not pay for traffic it will discard.
+
+Available predicates: update type (accounts, transactions, slots, entries,
+block metadata), account owner program, account pubkey, and include/exclude
+toggles for vote and failed transactions.
+
+The WebSocket sink currently applies the plugin-level filter only; it has no
+per-client filtering, so every connected client receives the full configured
+stream.
+
+## Sink Abstraction
+
+Every egress path implements one trait, so the runtime treats them uniformly:
+
+```rust
+pub trait Sink: Send + Sync + 'static {
+    fn send(&self, update: Update) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>>;
+    fn start(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> { /* no-op default */ }
+    fn flush(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>>;
+    fn shutdown(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>>;
+    fn health(&self) -> SinkHealth;
+    fn stats(&self) -> SinkStats;
+    fn name(&self) -> &'static str;
+}
+```
+
+`start()` exists because a sink that owns a listening socket cannot bind in its
+constructor: `create_sinks()` runs on the validator's thread during `on_load`,
+where there is no reactor to register a listener with. The worker calls
+`start()` for each sink from inside the runtime instead. A sink that fails to
+start is logged and left unstarted rather than failing plugin load, so losing
+one egress path does not take down a validator.
+
+`FanoutSink` wraps a set of sinks and broadcasts to the healthy ones.
+
+## Workspace Layout
+
+| Crate | Role |
+|-------|------|
+| `geyser-tap-plugin` | The cdylib the validator loads: FFI boundary, state, runtime bridge |
+| `geyser-tap-common` | Shared update types, `Sink` trait, config, errors, metrics, exporter |
+| `geyser-tap-proto` | Protobuf messages and the generated tonic service |
+| `geyser-tap-sink-grpc` | tonic server and per-subscriber fan-out |
+| `geyser-tap-sink-kafka` | rdkafka producer and partitioning |
+| `geyser-tap-sink-ws` | tokio-tungstenite server |
+| `geyser-tap-sdk` | Rust client for consuming the gRPC stream |
+
+## Trade-offs
+
+**Drop rather than block.** Back-pressure is resolved by discarding updates,
+never by blocking a validator thread. The alternative would give delivery
+guarantees at the risk of stalling consensus, which is not a trade worth
+making inside someone else's validator. Operators needing durability should
+use the Kafka sink, which has its own.
+
+**Serialization on the callback thread.** Payloads are copied and serialized
+where the validator hands them over, because the borrowed data is only valid
+for the duration of the call. `Bytes` keeps subsequent clones cheap, so the
+cost is paid once.
+
+**Sync callbacks, async sinks.** The validator's callbacks are synchronous and
+the sinks are async. A bounded crossbeam channel bridges them, costing one hop
+and keeping the callback free of any await.
+
+**JSON configuration.** The validator's plugin interface already hands the
+plugin a JSON file path, so using anything else would mean carrying a second
+config format for no benefit.
+
 ## Configuration Example
 
 ```json
@@ -339,6 +463,7 @@ All metrics use `geyser_tap_` prefix:
     "brokers": "kafka-1:9092,kafka-2:9092,kafka-3:9092",
     "topic": "solana-updates",
     "producer": {
+      "acks": "all",
       "compression": "zstd",
       "batch_size": 1000000,
       "linger_ms": 5

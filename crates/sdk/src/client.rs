@@ -51,10 +51,7 @@ impl GeyserClient {
     /// Subscribe to updates with the given subscription.
     ///
     /// Returns a stream of updates matching the subscription filters.
-    pub async fn subscribe(
-        &mut self,
-        subscription: Subscription,
-    ) -> SdkResult<UpdateStream> {
+    pub async fn subscribe(&mut self, subscription: Subscription) -> SdkResult<UpdateStream> {
         let request = subscription.into_request();
         tracing::debug!("Subscribing with filters: {:?}", request);
 

@@ -177,24 +177,22 @@ async fn run_worker(
     metrics: MetricsConfig,
     readiness: Readiness,
 ) {
-    tracing::info!(
-        sink_count = sinks.len(),
-        "Starting Geyser plugin worker"
-    );
+    tracing::info!(sink_count = sinks.len(), "Starting Geyser plugin worker");
 
     // Bind the metrics/health endpoints first, so /health/live answers while
     // the sinks are still coming up and a bind failure is visible immediately.
     if metrics.enabled {
         match metrics.bind_address.parse::<SocketAddr>() {
-            Ok(addr) => match geyser_tap_common::metrics_server::start(addr, readiness.clone()).await
-            {
-                Ok(bound) => tracing::info!(address = %bound, "Metrics server listening"),
-                Err(e) => tracing::error!(
-                    address = %addr,
-                    error = %e,
-                    "Failed to start metrics server; continuing without it"
-                ),
-            },
+            Ok(addr) => {
+                match geyser_tap_common::metrics_server::start(addr, readiness.clone()).await {
+                    Ok(bound) => tracing::info!(address = %bound, "Metrics server listening"),
+                    Err(e) => tracing::error!(
+                        address = %addr,
+                        error = %e,
+                        "Failed to start metrics server; continuing without it"
+                    ),
+                }
+            }
             Err(e) => tracing::error!(
                 bind_address = %metrics.bind_address,
                 error = %e,
