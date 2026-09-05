@@ -1,0 +1,39 @@
+[package]
+name = "geyser-tap-sink-ws"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WebSocket/TCP sink implementation for geyser-tap"
+
+[dependencies]
+geyser-tap-common.workspace = true
+geyser-tap-proto.workspace = true
+
+# WebSocket
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Async
+tokio.workspace = true
+
+# Observability
+tracing.workspace = true
+prometheus.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Concurrency
+parking_lot.workspace = true
+dashmap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+bs58.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
