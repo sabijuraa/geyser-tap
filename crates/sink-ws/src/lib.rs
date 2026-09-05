@@ -73,6 +73,10 @@ impl Sink for WsSink {
         })
     }
 
+    fn start(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> {
+        Box::pin(async move { WsSink::start(self).await })
+    }
+
     fn flush(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> {
         Box::pin(async move { Ok(()) })
     }

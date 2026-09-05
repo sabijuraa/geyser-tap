@@ -67,28 +67,32 @@ impl WsServer {
     }
 
     /// Start the server.
-    #[allow(clippy::await_holding_lock)]
+    ///
+    /// Binds before marking the server running, so a bind failure leaves the
+    /// state accurate and is reported to the caller.
     pub async fn start(&self) -> SinkResult<()> {
-        let mut state = self.state.write();
-        if *state != ServerState::NotStarted {
-            return Err(SinkError::NotReady("Server already started".to_string()));
+        // Scope the guard: a parking_lot guard is not Send, and holding one
+        // across the await below makes the whole future non-Send, which the
+        // Sink trait requires.
+        {
+            let state = self.state.read();
+            if *state != ServerState::NotStarted {
+                return Err(SinkError::NotReady("Server already started".to_string()));
+            }
         }
-        *state = ServerState::Running;
-        drop(state);
-
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-        *self.shutdown_tx.write() = Some(shutdown_tx);
 
         let bind_addr = self.config.bind_address;
-        let _max_clients = self.config.max_clients;
-        let _send_buffer_size = self.config.send_buffer_size;
 
         let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
             SinkError::Connection {
                 endpoint: bind_addr.to_string(),
-                message: e.to_string(),
+                message: format!("failed to bind websocket listener: {e}"),
             }
         })?;
+
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        *self.shutdown_tx.write() = Some(shutdown_tx);
+        *self.state.write() = ServerState::Running;
 
         tracing::info!(address = %bind_addr, "WebSocket server listening");
 

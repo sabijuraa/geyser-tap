@@ -24,6 +24,7 @@ geyser-tap-common.workspace = true
 geyser-tap-proto.workspace = true
 geyser-tap-sink-grpc.workspace = true
 geyser-tap-sink-kafka.workspace = true
+geyser-tap-sink-ws.workspace = true
 
 # Error handling
 thiserror.workspace = true

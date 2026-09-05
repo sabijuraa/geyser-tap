@@ -36,6 +36,7 @@ use geyser_tap_common::{
 };
 use geyser_tap_sink_grpc::GrpcSink;
 use geyser_tap_sink_kafka::KafkaSink;
+use geyser_tap_sink_ws::WsSink;
 use solana_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
     ReplicaEntryInfoVersions, ReplicaTransactionInfoVersions, Result as PluginResult,
@@ -162,6 +163,18 @@ impl GeyserTapPlugin {
                 );
                 let sink = KafkaSink::new(kafka_config.clone())
                     .map_err(geyser_tap_common::GeyserTapError::Sink)?;
+                sinks.push(Box::new(sink));
+            }
+        }
+
+        // Create WebSocket sink if enabled
+        if let Some(ref ws_config) = config.ws {
+            if ws_config.enabled {
+                tracing::info!(
+                    bind_address = %ws_config.bind_address,
+                    "Creating WebSocket sink"
+                );
+                let sink = WsSink::new(ws_config.clone());
                 sinks.push(Box::new(sink));
             }
         }
