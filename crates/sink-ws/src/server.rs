@@ -6,9 +6,10 @@ use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 /// Server configuration.
@@ -70,7 +71,7 @@ impl WsServer {
     ///
     /// Binds before marking the server running, so a bind failure leaves the
     /// state accurate and is reported to the caller.
-    pub async fn start(&self) -> SinkResult<()> {
+    pub async fn start(self: &Arc<Self>) -> SinkResult<()> {
         // Scope the guard: a parking_lot guard is not Send, and holding one
         // across the await below makes the whole future non-Send, which the
         // Sink trait requires.
@@ -97,6 +98,7 @@ impl WsServer {
         tracing::info!(address = %bind_addr, "WebSocket server listening");
 
         // Accept connections in a background task
+        let server = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -104,7 +106,10 @@ impl WsServer {
                         match result {
                             Ok((stream, addr)) => {
                                 tracing::debug!(remote = %addr, "New WebSocket connection");
-                                tokio::spawn(Self::handle_connection(stream, addr));
+                                let server = Arc::clone(&server);
+                                tokio::spawn(async move {
+                                    server.handle_connection(stream, addr).await;
+                                });
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "Accept error");
@@ -122,39 +127,63 @@ impl WsServer {
         Ok(())
     }
 
-    async fn handle_connection(stream: TcpStream, addr: SocketAddr) {
-        match accept_async(stream).await {
-            Ok(ws_stream) => {
-                let (mut write, mut read) = ws_stream.split();
+    /// Serve one accepted connection.
+    ///
+    /// The connection is registered in `clients` with an mpsc sender, and a
+    /// pump task forwards anything broadcast to that sender out over the
+    /// socket. Previously this function did the handshake and then only read,
+    /// never registering the client, so `broadcast` always iterated an empty
+    /// map and no consumer ever received a frame.
+    async fn handle_connection(self: Arc<Self>, stream: TcpStream, addr: SocketAddr) {
+        if self.clients.len() >= self.config.max_clients {
+            tracing::warn!(remote = %addr, "Rejecting WebSocket client: max_clients reached");
+            return;
+        }
 
-                // Simple echo/subscription handling
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            // Handle subscription request
-                            if text.starts_with('{') {
-                                // JSON subscription request
-                                tracing::debug!(remote = %addr, "Subscription request: {}", text);
-                            }
-                        }
-                        Ok(Message::Ping(data)) => {
-                            let _ = write.send(Message::Pong(data)).await;
-                        }
-                        Ok(Message::Close(_)) => break,
-                        Err(e) => {
-                            tracing::debug!(remote = %addr, error = %e, "WebSocket error");
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-
-                tracing::debug!(remote = %addr, "WebSocket connection closed");
-            }
+        let ws_stream = match accept_async(stream).await {
+            Ok(w) => w,
             Err(e) => {
                 tracing::warn!(remote = %addr, error = %e, "WebSocket handshake failed");
+                return;
+            }
+        };
+
+        let (mut write, mut read) = ws_stream.split();
+
+        let id = self.next_client_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, mut rx) = mpsc::channel::<String>(self.config.send_buffer_size);
+        self.clients.insert(id, WsClient::new(id, tx));
+        tracing::info!(remote = %addr, client_id = id, "WebSocket client registered");
+
+        // Forward broadcast messages to this socket until it errors or closes.
+        let writer = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if write.send(Message::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Read until the peer goes away. Subscription requests are accepted and
+        // logged; per-client server-side filtering is not implemented yet, so
+        // every registered client receives the full configured stream.
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    tracing::debug!(remote = %addr, "WebSocket message: {}", text);
+                }
+                Ok(Message::Close(_)) => break,
+                Err(e) => {
+                    tracing::debug!(remote = %addr, error = %e, "WebSocket error");
+                    break;
+                }
+                _ => {}
             }
         }
+
+        self.clients.remove(&id);
+        writer.abort();
+        tracing::info!(remote = %addr, client_id = id, "WebSocket client disconnected");
     }
 
     /// Broadcast an update to all connected clients.
