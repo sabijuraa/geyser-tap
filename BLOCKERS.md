@@ -190,12 +190,41 @@ which does land in the ledger's `validator.log`.
 Bridging tracing onto the `log` facade, or writing to a plugin-owned file,
 would make the plugin observable in production.
 
-## OPEN: tests/integration.rs never runs
+## OPEN: no Prometheus exporter exists
 
-`tests/integration.rs` sits at the workspace root. The root manifest is a
-virtual workspace with no `[package]`, so the file belongs to no crate and is
-never compiled. Its five tests have never executed despite being reported as
-passing coverage.
+`crates/common/src/metrics.rs` defines the counters and they are incremented
+at runtime, but nothing ever gathers, encodes or serves them. There is no
+`TextEncoder`, no `prometheus::gather()` and no HTTP listener anywhere in the
+workspace:
+
+```
+$ grep -rn 'TextEncoder\|prometheus::gather\|default_registry' --include=*.rs crates/
+(no matches)
+```
+
+`MetricsConfig::bind_address` is parsed from config and then never read, so a
+config that enables metrics is silently inert and the plugin cannot be scraped.
+
+This was previously described as "endpoint present, not scraped", which
+overstated it. The counters are real; the exposition side does not exist.
+
+## RESOLVED: tests/integration.rs never ran
+
+**Status: RESOLVED (2026-09-05).** The file sat at the workspace root, whose
+manifest is a virtual workspace with no `[package]`, so it belonged to no
+crate, was never compiled, and none of its tests had ever executed despite
+being cited as coverage.
+
+Moved to `crates/common/tests/integration.rs`, where cargo builds and runs it;
+the suite now reports `Running tests/integration.rs`, 5 passing, and the total
+goes from 28 to 33.
+
+`test_plugin_loads` was deleted rather than moved. It spawned a validator and
+asserted only that the spawn call returned `Ok`, which holds even when the
+plugin segfaults a moment later -- so it would have passed unchanged
+throughout the whole period the plugin was crashing every validator that
+loaded it. It also ran `solana-test-validator` from `PATH`, which is Agave
+4.0.2 here, the wrong interface major version.
 
 ### Date
 2026-09-05

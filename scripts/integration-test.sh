@@ -14,7 +14,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PLUGIN_PATH="$PROJECT_DIR/target/release/libgeyser_tap_plugin.so"
-CONFIG_PATH="$PROJECT_DIR/config/test-validator.json"
+# config/test-validator.json never existed; test-config.json is the real one.
+CONFIG_PATH="${CONFIG_PATH:-$PROJECT_DIR/test-config.json}"
+
+# The validator MUST match solana-geyser-plugin-interface (1.18) and be built
+# with the same rustc as the plugin, or it segfaults on load. Whatever is on
+# PATH is often a different major version, so allow an explicit override:
+#   VALIDATOR_BIN=/path/to/1.18.26/solana-test-validator ./scripts/integration-test.sh
+VALIDATOR_BIN="${VALIDATOR_BIN:-solana-test-validator}"
 TEST_LEDGER_DIR="/tmp/geyser-tap-test-ledger"
 
 # Colors for output
@@ -50,8 +57,8 @@ trap cleanup EXIT
 check_prerequisites() {
     log_info "Checking prerequisites..."
 
-    if ! command -v solana-test-validator &> /dev/null; then
-        log_error "solana-test-validator not found. Install Solana CLI first."
+    if ! command -v "$VALIDATOR_BIN" &> /dev/null; then
+        log_error "$VALIDATOR_BIN not found. Install Solana CLI or set VALIDATOR_BIN."
         log_info "Run: sh -c \"\$(curl -sSfL https://release.solana.com/stable/install)\""
         exit 1
     fi
@@ -136,7 +143,7 @@ start_validator() {
     rm -rf "$TEST_LEDGER_DIR"
     mkdir -p "$TEST_LEDGER_DIR"
 
-    solana-test-validator \
+    "$VALIDATOR_BIN" \
         --ledger "$TEST_LEDGER_DIR" \
         --geyser-plugin-config "$CONFIG_PATH" \
         --quiet \

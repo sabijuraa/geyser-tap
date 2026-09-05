@@ -133,15 +133,15 @@ The plugin is a `.so` loaded by the validator via `dlopen()`. The validator is C
 
 ### Solution
 
-1. **`panic = "abort"` in release profile**: Prevents unwinding entirely
-2. **`catch_unwind` wrapper**: Catches panics before FFI boundary
+1. **`catch_unwind` wrapper**: catches panics before the FFI boundary
+2. **`panic = "unwind"` in release profile**: required for (1) to work at all
 3. **Explicit `CStr` handling**: No assumptions about validator-provided strings
 4. **No allocations visible to C**: All memory is Rust-managed
 
 ```rust
-// Release profile ensures no unwinding
+// Release profile MUST unwind, or catch_unwind below is a no-op
 [profile.release]
-panic = "abort"
+panic = "unwind"
 
 // Runtime safety net
 fn catch_panic<F, R>(&self, context: &str, f: F) -> PluginResult<R>

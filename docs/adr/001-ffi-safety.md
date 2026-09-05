@@ -1,5 +1,15 @@
 # ADR-001: FFI Safety Model
 
+> **Superseded 2026-09-05 on the `panic` setting.** The release profile now
+> uses `panic = "unwind"`. `panic = "abort"` is not a backstop or
+> defense-in-depth for `catch_unwind` -- it *disables* it. With unwinding off,
+> `catch_unwind` can never catch a panic, so every callback wrapper was inert
+> and a plugin panic aborted the validator outright. The two settings are
+> mutually exclusive; panic isolation requires `unwind`. Unwinding stays
+> confined to the plugin because `catch_unwind` sits immediately inside each
+> `extern "C"` callback. The rest of this ADR still stands. See
+> VERIFICATION.md (FR6).
+
 ## Status
 Accepted
 

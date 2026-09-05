@@ -85,7 +85,7 @@ The `catch_panic` wrapper:
 3. Logs the panic with context
 4. Returns `GeyserPluginError` instead of unwinding
 
-Additionally, the release profile sets `panic = "abort"` as a backstop. This prevents any unwind from crossing FFI even if a panic escapes `catch_unwind` due to a bug.
+Additionally, the release profile sets `panic = "unwind"`, which `catch_unwind` requires in order to catch anything. This was previously `panic = "abort"`, described as a backstop; it is the opposite -- with unwinding disabled, `catch_unwind` never fires and a panic aborts the validator. Unwinding does not cross the FFI boundary because `catch_unwind` sits immediately inside each `extern "C"` callback.
 
 All `unsafe` blocks in the plugin are documented with their invariants (currently only the `CStr::from_ptr` in config path handling).
 

@@ -1,8 +1,10 @@
 # geyser-tap Definition of Done Verification
 
 Date: 2026-09-05
-Status: PASS with two exceptions (Kafka delivery and the Docker image are
-unverified in this environment; nothing else is outstanding)
+Status: end-to-end PASS. Three areas are explicitly NOT proven and are marked
+as such below: Kafka delivery (implemented, never run against a broker), the
+Docker image (pin corrected, never built -- no reachable daemon), and
+Prometheus metrics (counters recorded, but no exporter exists at all).
 
 End-to-end now genuinely works: the plugin loads into
 `solana-test-validator 1.18.26`, both the gRPC and websocket sinks bind, and
@@ -149,19 +151,55 @@ Bounded crossbeam channel with `try_send` and drop-on-full
 Not stress-tested to the point of actually forcing drops.
 
 ## FR8: Observable with Prometheus metrics
-**Status: PARTIAL**
+**Status: FAIL**
 
-The counters exist and are recorded. The metrics HTTP endpoint was not
-scraped during these runs, so the exposition side is unverified.
+Correcting an earlier statement in this document: I previously recorded this
+as "endpoint present, not scraped". That was wrong. There is **no exporter at
+all**.
+
+`crates/common/src/metrics.rs` defines the counters and they are incremented
+at runtime, but nothing gathers or encodes them and no HTTP server is ever
+bound. There is no `TextEncoder`, no `prometheus::gather()`, and no listener
+anywhere in the workspace:
+
+```
+$ grep -rn 'TextEncoder\|prometheus::gather\|default_registry' --include=*.rs crates/
+(no matches)
+```
+
+`metrics.bind_address` is parsed from config and then never read, so a config
+enabling metrics is silently inert. The counters are real and maintained; they
+are simply unreachable from outside the process.
 
 ## NFR: Quality
 **Status: PASS**
 
-`cargo test --release`: 28 tests pass across all crates.
+`cargo test --release`: **33 tests pass** across all crates.
 
-Note: `tests/integration.rs` sits at the workspace root, which is a virtual
-manifest with no `[package]`, so it belongs to no crate and never compiles or
-runs. Those five tests have never executed. They are not counted above.
+This previously read 28, and separately noted that `tests/integration.rs` sat
+at the workspace root -- a virtual manifest with no `[package]` -- so it
+belonged to no crate, never compiled, and had never executed despite being
+cited as coverage. That file is now at `crates/common/tests/integration.rs`
+and genuinely runs:
+
+```
+     Running tests/integration.rs (target/release/deps/integration-650135c89c206801)
+running 5 tests
+test test_config_validation ... ok
+test test_disabled_kafka_block_still_requires_brokers ... ok
+test test_filter_defaults ... ok
+test test_sink_health ... ok
+test test_update_serialization ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored
+```
+
+One test was deleted rather than ported: `test_plugin_loads` spawned a
+validator and asserted only that the *spawn call* succeeded, which is true even
+when the plugin segfaults immediately afterwards. It would have passed
+throughout the entire period the plugin was crashing every validator it was
+loaded into, and it invoked `solana-test-validator` from `PATH`, which is
+Agave 4.0.2 here. A test that cannot fail for the reason it claims to check is
+worse than none; the real end-to-end check is the consumer run below.
 
 ## A: End-to-end consumer test
 **Status: PASS**
@@ -217,16 +255,17 @@ the run.
 | FR5: SDK | PASS - was a stub, now real |
 | FR6: FFI safety | PASS - was defeated by panic=abort |
 | FR7: Backpressure | PASS |
-| FR8: Metrics | PARTIAL - endpoint not scraped |
-| Clippy / tests | PASS - 28 tests |
+| FR8: Metrics | FAIL - counters recorded, no exporter exists |
+| Clippy / tests | PASS - 33 tests |
 | E2E consumer test | PASS - 5496 updates, all five types |
 | Docker image | UNVERIFIED - no daemon |
 
 Outstanding, in rough priority order:
 
-1. Kafka delivery has never been exercised against a broker.
-2. The Docker image build is unverified.
-3. `tests/integration.rs` belongs to no crate and never runs.
+1. No Prometheus exporter: counters are recorded but unreachable, and
+   `metrics.bind_address` is dead config.
+2. Kafka delivery has never been exercised against a broker.
+3. The Docker image build is unverified -- no reachable daemon here.
 4. Plugin `tracing` output never reaches the validator log: `solana_logger`
    installs the global `log` logger first, so the plugin's
    `tracing_subscriber` init is a no-op. All plugin-side diagnostics are
