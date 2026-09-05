@@ -91,11 +91,11 @@ impl GrpcSink {
     /// This spawns the server on the Tokio runtime and returns immediately.
     /// The server runs until `shutdown()` is called.
     pub async fn start(&self) -> SinkResult<()> {
-        // Implementation would bind and start the server
         tracing::info!(
             bind_address = %self.config.bind_address,
             "Starting gRPC server"
         );
+        self.server.start().await?;
         Ok(())
     }
 
@@ -124,6 +124,10 @@ impl Sink for GrpcSink {
             geyser_tap_common::metrics::record_update_sent("grpc", update_type);
             Ok(())
         })
+    }
+
+    fn start(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> {
+        Box::pin(async move { GrpcSink::start(self).await })
     }
 
     fn flush(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> {

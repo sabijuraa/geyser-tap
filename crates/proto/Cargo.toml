@@ -13,4 +13,5 @@ tonic.workspace = true
 bytes.workspace = true
 geyser-tap-common.workspace = true
 
-# build-dependencies removed - types defined manually in lib.rs
+[build-dependencies]
+tonic-build.workspace = true

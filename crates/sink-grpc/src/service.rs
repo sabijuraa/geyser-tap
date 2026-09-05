@@ -53,7 +53,7 @@ impl GeyserService {
     /// 2. Builds a filter from the request
     /// 3. Registers the client with the broadcaster
     /// 4. Returns a stream of updates
-    pub async fn subscribe(
+    pub async fn handle_subscribe(
         &self,
         request: Request<geyser::SubscribeRequest>,
     ) -> StreamResult<UpdateStream> {
@@ -161,7 +161,7 @@ impl GeyserService {
     }
 
     /// Handle a ping request (health check).
-    pub async fn ping(
+    pub async fn handle_ping(
         &self,
         request: Request<geyser::PingRequest>,
     ) -> StreamResult<geyser::PingResponse> {
@@ -179,69 +179,30 @@ impl GeyserService {
     }
 }
 
-/// Tonic gRPC server implementation.
+/// The tonic-generated server wrapper for the `geyser.GeyserStream` service.
 ///
-/// This wraps GeyserService with the tonic Server trait for the streaming RPC.
-#[derive(Clone)]
-pub struct GeyserStreamServer {
-    inner: Arc<GeyserService>,
-}
-
-impl GeyserStreamServer {
-    /// Create a new server wrapping the given service.
-    pub fn new(service: GeyserService) -> Self {
-        Self {
-            inner: Arc::new(service),
-        }
-    }
-
-    /// Access the inner service.
-    pub fn inner(&self) -> &GeyserService {
-        &self.inner
-    }
-}
-
-/// Service trait for the geyser streaming RPC.
-///
-/// Clients call `Subscribe` to receive a stream of validator updates.
-#[tonic::async_trait]
-pub trait GeyserStream: Send + Sync + 'static {
-    /// Server-streaming response type for Subscribe.
-    type SubscribeStream: tokio_stream::Stream<Item = Result<geyser_tap_proto::geyser::StreamUpdate, Status>>
-        + Send
-        + 'static;
-
-    /// Subscribe to validator updates with optional filtering.
-    async fn subscribe(
-        &self,
-        request: Request<geyser_tap_proto::geyser::SubscribeRequest>,
-    ) -> Result<Response<Self::SubscribeStream>, Status>;
-
-    /// Ping the server for health checking.
-    async fn ping(
-        &self,
-        request: Request<geyser_tap_proto::geyser::PingRequest>,
-    ) -> Result<Response<geyser_tap_proto::geyser::PingResponse>, Status>;
-}
+/// This used to be a hand-rolled struct plus a bespoke `GeyserStream` trait,
+/// which looked like a service but implemented none of tonic's routing, so
+/// nothing could ever be served over the wire. It is now the real generated
+/// type, and `GeyserService` implements the generated trait below.
+pub use geyser_tap_proto::geyser::geyser_stream_server::GeyserStreamServer;
 
 #[tonic::async_trait]
-impl GeyserStream for GeyserStreamServer {
-    type SubscribeStream = std::pin::Pin<
-        Box<dyn tokio_stream::Stream<Item = Result<geyser_tap_proto::geyser::StreamUpdate, Status>> + Send>
-    >;
+impl geyser_tap_proto::geyser::geyser_stream_server::GeyserStream for GeyserService {
+    type SubscribeStream = UpdateStream;
 
     async fn subscribe(
         &self,
-        request: Request<geyser_tap_proto::geyser::SubscribeRequest>,
+        request: Request<geyser::SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
-        self.inner.subscribe(request).await
+        self.handle_subscribe(request).await
     }
 
     async fn ping(
         &self,
-        request: Request<geyser_tap_proto::geyser::PingRequest>,
-    ) -> Result<Response<geyser_tap_proto::geyser::PingResponse>, Status> {
-        self.inner.ping(request).await
+        request: Request<geyser::PingRequest>,
+    ) -> Result<Response<geyser::PingResponse>, Status> {
+        self.handle_ping(request).await
     }
 }
 

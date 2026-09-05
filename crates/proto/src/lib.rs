@@ -30,8 +30,14 @@
 pub mod geyser {
     //! Geyser streaming protocol definitions.
 
-    // Types defined manually to avoid protoc dependency during cross-platform builds.
-    // For production with tonic-build, use: include!(concat!(env!("OUT_DIR"), "/geyser.rs"));
+    // Message types are defined manually below (prost derive) so their exact
+    // field types stay under our control -- notably `bytes::Bytes` for the
+    // zero-copy payload fields.
+    //
+    // The tonic *service* layer (GeyserStream client + server routing) is
+    // generated from src/geyser.proto by build.rs and included at the bottom of
+    // this module. build.rs maps every message onto the manual type of the same
+    // name via extern_path, so there is exactly one definition of each message.
 
     use bytes::Bytes;
     use prost::Message;
@@ -301,6 +307,11 @@ pub mod geyser {
         #[prost(uint64, tag = "3")]
         pub current_slot: u64,
     }
+
+    // Generated tonic service layer: `geyser_stream_client` and
+    // `geyser_stream_server`. Contains no message definitions -- those are the
+    // types above, wired in by build.rs via extern_path.
+    include!(concat!(env!("OUT_DIR"), "/geyser.rs"));
 }
 
 /// Conversion implementations from internal types to protobuf.

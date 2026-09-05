@@ -4,13 +4,15 @@
 //! and streams updates to them.
 
 use crate::broadcaster::Broadcaster;
-use crate::service::GeyserService;
+use crate::service::{GeyserService, GeyserStreamServer};
 use geyser_tap_common::{GrpcSinkConfig, SinkError, SinkResult, Update};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-// Server import kept for future tonic-build integration
+use tonic::transport::server::TcpIncoming;
+use tonic::transport::Server;
 
 /// gRPC server configuration.
 #[derive(Debug, Clone)]
@@ -90,43 +92,80 @@ impl GrpcServer {
 
     /// Start the server.
     ///
-    /// This spawns the server task and returns immediately.
+    /// Binds the listener before returning, so a bind failure (port in use,
+    /// permission denied) surfaces here rather than being swallowed inside a
+    /// detached task. The serving loop itself is spawned and runs until
+    /// `shutdown()` is called.
     pub async fn start(&self) -> SinkResult<()> {
-        let mut state = self.state.write();
-        if *state != ServerState::NotStarted {
-            return Err(SinkError::NotReady(
-                "Server already started".to_string(),
-            ));
+        {
+            let state = self.state.read();
+            if *state != ServerState::NotStarted {
+                return Err(SinkError::NotReady("Server already started".to_string()));
+            }
         }
+        *self.state.write() = ServerState::Starting;
 
-        *state = ServerState::Starting;
+        let bind_addr = self.config.bind_address;
+
+        // Bind up front so the caller learns about failures synchronously.
+        let listener = match TcpListener::bind(bind_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                *self.state.write() = ServerState::Stopped;
+                return Err(SinkError::Connection {
+                    endpoint: bind_addr.to_string(),
+                    message: format!("failed to bind gRPC listener: {e}"),
+                });
+            }
+        };
+
+        let local_addr = listener.local_addr().unwrap_or(bind_addr);
+
+        let incoming = match TcpIncoming::from_listener(listener, true, None) {
+            Ok(i) => i,
+            Err(e) => {
+                *self.state.write() = ServerState::Stopped;
+                return Err(SinkError::Connection {
+                    endpoint: bind_addr.to_string(),
+                    message: format!("failed to wrap listener for tonic: {e}"),
+                });
+            }
+        };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         *self.shutdown_tx.write() = Some(shutdown_tx);
 
-        let bind_addr = self.config.bind_address;
-        let broadcaster = Arc::clone(&self.broadcaster);
+        let service = GeyserService::new(
+            Arc::clone(&self.broadcaster),
+            self.config.max_connections,
+        );
+        let svc = GeyserStreamServer::new(service);
 
-        let max_connections = self.config.max_connections;
-
-        // Spawn the server task
         tokio::spawn(async move {
-            tracing::info!(address = %bind_addr, "gRPC server starting");
+            tracing::info!(address = %local_addr, "gRPC server serving");
 
-            // Build the service - using GeyserStreamServer which implements GeyserStream
-            let service = GeyserService::new(broadcaster, max_connections);
-            let _server = crate::service::GeyserStreamServer::new(service);
+            let result = Server::builder()
+                .add_service(svc)
+                .serve_with_incoming_shutdown(incoming, async move {
+                    shutdown_rx.await.ok();
+                })
+                .await;
 
-            // Note: Full tonic service integration requires tonic-build with protoc.
-            // This implementation provides the core broadcast functionality.
-            // For production gRPC serving, generate service code from geyser.proto.
-            tracing::info!("gRPC server awaiting shutdown signal (service ready for tonic-build integration)");
-            shutdown_rx.await.ok();
-            tracing::info!("gRPC server received shutdown signal");
+            match result {
+                Ok(()) => tracing::info!("gRPC server stopped cleanly"),
+                Err(e) => tracing::error!(error = %e, "gRPC server terminated with error"),
+            }
         });
 
-        *state = ServerState::Running;
+        *self.state.write() = ServerState::Running;
+        tracing::info!(address = %local_addr, "gRPC server listening");
+
         Ok(())
+    }
+
+    /// The address the server actually bound to.
+    pub fn bind_address(&self) -> SocketAddr {
+        self.config.bind_address
     }
 
     /// Broadcast an update to all connected clients.
