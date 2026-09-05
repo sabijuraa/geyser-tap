@@ -279,9 +279,10 @@ until the worker has started the sinks.
 ## NFR: Quality
 **Status: PASS**
 
-`cargo test --release`: **33 tests pass** across all crates.
+`cargo test --release`: **36 tests pass** across all crates.
 
-This previously read 28, and separately noted that `tests/integration.rs` sat
+This previously read 28 (and later 33, before the metrics-server tests were
+added), and separately noted that `tests/integration.rs` sat
 at the workspace root -- a virtual manifest with no `[package]` -- so it
 belonged to no crate, never compiled, and had never executed despite being
 cited as coverage. That file is now at `crates/common/tests/integration.rs`
@@ -361,7 +362,7 @@ the run.
 | FR6: FFI safety | PASS - was defeated by panic=abort |
 | FR7: Backpressure | PASS |
 | FR8: Metrics | PASS - /metrics + /health served and scraped |
-| Clippy / tests | PASS - 33 tests |
+| Clippy / tests | PASS - 36 tests |
 | E2E consumer test | PASS - 5496 updates, all five types |
 | Docker image | PASS - built, artifact loads and streams |
 
