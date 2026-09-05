@@ -106,22 +106,96 @@ toolchain's `.so` in place. Remove the artifact (or use a separate
 `CARGO_TARGET_DIR`) when switching, or you will test the wrong binary — this
 produced one false result during this investigation.
 
-## OPEN: No data egress from the sinks
+## RESOLVED: No data egress from the sinks
 
-The plugin loads and ingests, but nothing is served to consumers yet.
+**Status: RESOLVED (2026-09-05).** Consumers now receive data over both the
+gRPC and websocket sinks. Three separate defects were involved:
 
-- `GrpcSink::start()` (`crates/sink-grpc/src/lib.rs:93`) is a stub — it logs
-  "Starting gRPC server" and returns `Ok(())` without binding. Port 10000
-  never listens.
-- The websocket sink is implemented and does bind
-  (`crates/sink-ws/src/server.rs:86`), but it is not wired into the plugin:
-  `geyser-tap-sink-ws` is not a dependency of `crates/plugin`, and
-  `create_sinks()` (`crates/plugin/src/ffi.rs:140`) only ever constructs the
-  gRPC and Kafka sinks. The `ws` config block is parsed and validated, then
-  ignored.
+1. **No real gRPC service existed.** `crates/proto` hand-wrote the prost
+   message types and `sink-grpc/src/service.rs` hand-wrote a `GeyserStream`
+   trait plus a `GeyserStreamServer` struct that implemented none of tonic's
+   routing. They looked like a service but could not be mounted on a tonic
+   server, which is why `GrpcSink::start()` was a stub -- there was nothing to
+   serve. `crates/proto/build.rs` now runs tonic-build to generate the real
+   client and server, mapping every message onto the existing hand-written
+   type via `extern_path` so no message is defined twice and the wire format
+   is unchanged. This adds a build-time dependency on `protoc`.
 
-Confirmed by `ss -ltn` during a live validator run: only the validator's own
-8899 was listening; 10000 and 10001 were absent.
+2. **`Sink` had no lifecycle hook.** `create_sinks()` returned
+   `Vec<Box<dyn Sink>>` and the worker went straight to `send()`.
+   `GrpcSink::start` and `WsSink::start` existed only as inherent methods that
+   nothing called, so even a correct `start()` would never have run. Added
+   `Sink::start()` with a no-op default, called for every sink at the top of
+   the plugin worker -- inside the runtime, since `create_sinks()` runs on the
+   validator thread during `on_load` where there is no reactor.
+
+3. **The websocket server never registered its clients.** It completed the
+   handshake and then only read, so `broadcast()` always iterated an empty map
+   and a connected client sat silent forever.
+
+Verified against a live validator:
+
+```
+$ ss -ltn | grep -E ':10000|:10001'
+LISTEN 0      128         127.0.0.1:10000      0.0.0.0:*
+LISTEN 0      128         127.0.0.1:10001      0.0.0.0:*
+```
+
+gRPC consumer: 5496 updates in 30s across all five update types.
+Websocket consumer: 3671 JSON frames. Full output in VERIFICATION.md.
+
+## RESOLVED: catch_unwind was defeated by panic="abort"
+
+**Status: RESOLVED (2026-09-05).** The release profile is now
+`panic = "unwind"`, so the `catch_unwind` at the FFI boundary actually
+catches. Confirmed on the release artifact itself
+(`_Unwind_RaiseException`, `_Unwind_Resume` and `.gcc_except_table` are
+present; all absent under `panic="abort"`).
+
+`on_load` is still not wrapped in `catch_panic`.
+
+## OPEN: Docker image build unverified
+
+The Dockerfile pinned `rust:1.82`, which builds a `.so` that segfaults the
+validator on load. It is now pinned to `rust:1.75` to match, and
+`protobuf-compiler` (needed by the new tonic-build step) was already present.
+
+The build itself could **not** be run here:
+
+```
+$ docker build -t geyser-tap:verify --target builder .
+We recommend to activate the WSL integration in Docker Desktop settings.
+```
+
+The Docker daemon is unreachable from WSL in this environment. The pin matches
+`rust-toolchain.toml`, which is verified working on the host, but the
+container build is untested. Someone with a working daemon should run it and
+confirm the resulting `.so` loads.
+
+## OPEN: Kafka sink never exercised
+
+The rdkafka producer is implemented but no broker has ever been run against
+it, so no message has been confirmed delivered. `docker-compose.yml` provides
+a Kafka service; verifying this needs a working Docker daemon.
+
+## OPEN: Plugin logs never reach the validator log
+
+`solana_logger` installs the global `log` logger during validator startup, so
+the plugin's `tracing_subscriber::fmt().try_init()` in `on_load` is a no-op
+and every `tracing::info!`/`error!` in the plugin and sinks is discarded. This
+made the original segfault far harder to diagnose than it needed to be -- the
+only way to get output from inside the plugin was raw `libc::write` to fd 2,
+which does land in the ledger's `validator.log`.
+
+Bridging tracing onto the `log` facade, or writing to a plugin-owned file,
+would make the plugin observable in production.
+
+## OPEN: tests/integration.rs never runs
+
+`tests/integration.rs` sits at the workspace root. The root manifest is a
+virtual workspace with no `[package]`, so the file belongs to no crate and is
+never compiled. Its five tests have never executed despite being reported as
+passing coverage.
 
 ### Date
 2026-09-05
