@@ -1,0 +1,79 @@
+{
+  "libpath": "/path/to/libgeyser_tap_plugin.so",
+
+  "grpc": {
+    "enabled": true,
+    "bind_address": "0.0.0.0:10000",
+    "max_connections": 100,
+    "send_buffer_size": 65536,
+    "filters": {
+      "account_owners": [],
+      "account_pubkeys": [],
+      "include_votes": false,
+      "include_failed": true,
+      "update_types": {
+        "accounts": true,
+        "transactions": true,
+        "slots": true,
+        "entries": false,
+        "block_metadata": true
+      }
+    }
+  },
+
+  "kafka": {
+    "enabled": false,
+    "brokers": "localhost:9092",
+    "topic": "solana-updates",
+    "account_topic": "solana-accounts",
+    "transaction_topic": "solana-transactions",
+    "producer": {
+      "acks": "1",
+      "compression": "zstd",
+      "batch_size": 1000000,
+      "linger_ms": 5,
+      "max_in_flight": 5
+    },
+    "filters": {
+      "include_votes": false,
+      "include_failed": true,
+      "update_types": {
+        "accounts": true,
+        "transactions": true,
+        "slots": true,
+        "entries": false,
+        "block_metadata": true
+      }
+    }
+  },
+
+  "websocket": {
+    "enabled": true,
+    "bind_address": "0.0.0.0:10001",
+    "max_clients": 100,
+    "send_buffer_size": 65536,
+    "filters": {
+      "accounts": true,
+      "transactions": true,
+      "slots": true,
+      "entries": true,
+      "block_metadata": true
+    }
+  },
+
+  "plugin": {
+    "channel_capacity": 100000,
+    "worker_threads": 4,
+    "panic_on_init_failure": true
+  },
+
+  "logging": {
+    "level": "info",
+    "json": false
+  },
+
+  "metrics": {
+    "enabled": true,
+    "bind_address": "127.0.0.1:9090"
+  }
+}

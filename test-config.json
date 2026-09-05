@@ -1,0 +1,38 @@
+{
+  "libpath": "/root/projects/solana/geyser-tap/target/release/libgeyser_tap_plugin.so",
+  "plugin": {
+    "channel_capacity": 10000,
+    "worker_threads": 2
+  },
+  "grpc": {
+    "enabled": true,
+    "bind_address": "127.0.0.1:10000",
+    "max_connections": 10,
+    "send_buffer_size": 1000,
+    "filters": {
+      "update_types": {
+        "accounts": true,
+        "transactions": true,
+        "slots": true,
+        "entries": true,
+        "block_metadata": true
+      }
+    }
+  },
+  "kafka": {
+    "enabled": false
+  },
+  "ws": {
+    "enabled": true,
+    "bind_address": "127.0.0.1:10001",
+    "max_clients": 10,
+    "send_buffer_size": 1000,
+    "filters": {
+      "accounts": true,
+      "transactions": true,
+      "slots": true,
+      "entries": true,
+      "block_metadata": true
+    }
+  }
+}
