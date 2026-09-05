@@ -1,7 +1,11 @@
 # geyser-tap Definition of Done Verification
 
-Date: 2026-09-04
-Status: PARTIAL - See blockers
+Date: 2026-09-05
+Status: PARTIAL - plugin now loads in the validator; no data egress yet
+
+Changes since 2026-09-04: the load segfault is fixed and the plugin runs a
+full validator session. Investigating it also disproved two claims that were
+previously marked PASS (FR3 and FR6); both are corrected below.
 
 ## FR1: Full GeyserPlugin trait implementation
 **Status: PASS**
@@ -55,11 +59,24 @@ crates/sink-kafka/src/partitioner.rs:74:Bytes::new()  # Test mock data
 ```
 
 ## FR3: Three egress sinks
-**Status: PASS**
+**Status: FAIL** (was incorrectly marked PASS on 2026-09-04)
 
-- gRPC: `crates/sink-grpc/` - Full broadcaster implementation
-- Kafka: `crates/sink-kafka/` - rdkafka producer with compression
-- WebSocket: `crates/sink-ws/` - tokio-tungstenite server
+All three crates exist and compile, but no sink actually serves data:
+
+- gRPC (`crates/sink-grpc/`): broadcaster and service are implemented, but
+  `GrpcSink::start()` (`src/lib.rs:93`) is a stub. It logs "Starting gRPC
+  server" and returns `Ok(())` without ever binding a listener.
+- Kafka (`crates/sink-kafka/`): rdkafka producer implemented. Not exercised —
+  no broker was run against it.
+- WebSocket (`crates/sink-ws/`): server is implemented and does bind
+  (`src/server.rs:86`), but it is **not wired into the plugin**.
+  `geyser-tap-sink-ws` is not a dependency of `crates/plugin`, and
+  `create_sinks()` (`crates/plugin/src/ffi.rs:140`) constructs only the gRPC
+  and Kafka sinks. The `ws` config block is parsed and validated, then ignored.
+
+Measured during a live validator run with `grpc.enabled` and `ws.enabled`
+both true: `ss -ltn` showed only the validator's own port 8899. Ports 10000
+(gRPC) and 10001 (websocket) were never opened.
 
 ## FR4: Subscription/filtering engine
 **Status: PASS**
@@ -78,7 +95,7 @@ Evidence: `crates/sdk/` exists with:
 - `src/error.rs` - Error handling
 
 ## FR6: FFI safety with catch_unwind
-**Status: PASS**
+**Status: PARTIAL** (was incorrectly marked PASS on 2026-09-04)
 
 Evidence (crates/plugin/src/ffi.rs:84-111):
 ```rust
@@ -93,7 +110,20 @@ where
 }
 ```
 
-All hot-path methods use catch_panic wrapper.
+All hot-path methods use the `catch_panic` wrapper.
+
+**However, this does not currently work.** The release profile in the
+workspace `Cargo.toml` sets `panic = "abort"`. Under `panic = "abort"` there
+is no unwinding, so `catch_unwind` never catches: a panic in any callback
+aborts the validator process instead of being logged and swallowed.
+
+The two settings are mutually exclusive and the code has to pick one:
+- keep `panic = "abort"` and drop `catch_panic` as dead code, accepting that
+  a plugin panic kills the validator; or
+- switch the release profile to `panic = "unwind"` so `catch_panic` does what
+  its documentation claims.
+
+`on_load` is additionally not wrapped in `catch_panic` at all.
 
 ## FR7: Backpressure-aware bounded channels
 **Status: PASS**
@@ -133,15 +163,42 @@ Tests: `cargo test --release` PASSES
 Build: `cargo build --release` produces valid .so
 
 ## A: End-to-end consumer test
-**Status: BLOCKED**
+**Status: PARTIAL — plugin loads and runs; no consumer data verified**
 
-See BLOCKERS.md - solana-test-validator segfaults when loading plugin.
-ABI compatibility issue between Rust 1.98.1 compiled plugin and validator.
+Resolved: the load segfault. The plugin now runs a full
+`solana-test-validator 1.18.26` session (70s, past slot 100) with no crash and
+no plugin errors. Root cause and evidence are in BLOCKERS.md; in short it was
+two independent faults — an invalid `test-config.json` (a disabled `kafka`
+block still missing the required `brokers` field) whose `on_load` error return
+tripped a use-after-`dlclose` in the validator, plus a rustc mismatch
+(plugin 1.88.0 vs validator 1.75.0) across the `*mut dyn GeyserPlugin` vtable.
+
+Verified by controlled comparison against the same corrected config:
+
+| Plugin built with | Validator 1.18.26 |
+|---|---|
+| rustc 1.88.0 | Segmentation fault (exit 139) |
+| rustc 1.75.0 | Full clean run (exit 124 = timeout) |
+
+Still outstanding: a consumer has **not** received a single update, because no
+sink binds a port (see FR3). The end-to-end claim is not met — only the
+ingest half of the path is demonstrated.
+
+Reproduce with the matching validator (not the Agave 4.0.2 one on `PATH`):
+
+```
+cargo build --release -p geyser-tap-plugin
+/root/solana-release/bin/solana-test-validator \
+  --ledger /tmp/gt-ledger \
+  --geyser-plugin-config test-config.json
+```
 
 ## B-I: Build artifacts, Docker, Docs
-**Status: PASS**
+**Status: PARTIAL** - Dockerfile pins the wrong rustc (see below)
 
-- Dockerfile: exists and updated to Rust 1.82
+- Dockerfile: exists, but pins Rust 1.82 — this is now wrong. The plugin must
+  be built with rustc 1.75 to match the validator, so the Dockerfile will
+  produce a `.so` that segfaults on load. Not yet updated.
 - docker-compose.yml: exists with Kafka, Prometheus, Grafana
 - SYSTEM_DESIGN.md: exists
 - ADRs: 4 documents in docs/adr/
@@ -154,14 +211,23 @@ ABI compatibility issue between Rust 1.98.1 compiled plugin and validator.
 |------|--------|
 | FR1: GeyserPlugin trait | PASS |
 | FR2: Real payloads | PASS |
-| FR3: Three sinks | PASS |
+| FR3: Three sinks | FAIL - no sink binds; ws not wired in |
 | FR4: Filtering | PASS |
 | FR5: SDK | PASS |
-| FR6: FFI safety | PASS |
+| FR6: FFI safety | PARTIAL - catch_unwind defeated by panic=abort |
 | FR7: Backpressure | PASS |
 | FR8: Metrics | PASS |
 | Clippy clean | PASS |
 | Tests pass | PASS |
-| E2E test | BLOCKED |
+| E2E test | PARTIAL - loads and runs; no egress |
 
-**Overall: 10/11 items PASS, 1 BLOCKED (E2E test requires ABI fix)**
+**Overall: 8/11 PASS, 1 FAIL, 2 PARTIAL.**
+
+The headline change is that the validator load segfault is fixed and the
+plugin is stable in-process. The remaining gap is egress: the gRPC sink never
+binds and the websocket sink is not connected to the plugin, so no consumer
+can receive data yet. FR3 and FR6 were previously overstated and are corrected
+here.
+
+Not verified this round: Kafka delivery against a real broker, and the
+Prometheus endpoint.
