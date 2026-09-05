@@ -35,6 +35,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # protoc: crates/proto/build.rs generates the tonic service layer.
+      # The rest are for rdkafka-sys, which builds librdkafka from source via
+      # cmake; without the curl headers in particular it fails with
+      # "fatal error: curl/curl.h: No such file or directory".
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -42,7 +46,11 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            pkg-config
+            pkg-config \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsasl2-dev \
+            zlib1g-dev
 
       # Must match rust-toolchain.toml. The plugin is a cdylib whose entry point
       # returns a Rust trait object across dlopen, and vtable layout is not
@@ -85,6 +93,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # protoc: crates/proto/build.rs generates the tonic service layer.
+      # The rest are for rdkafka-sys, which builds librdkafka from source via
+      # cmake; without the curl headers in particular it fails with
+      # "fatal error: curl/curl.h: No such file or directory".
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -92,7 +104,11 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            pkg-config
+            pkg-config \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsasl2-dev \
+            zlib1g-dev
 
       - name: Install Rust 1.75.0
         uses: dtolnay/rust-toolchain@1.75.0
@@ -126,6 +142,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # protoc: crates/proto/build.rs generates the tonic service layer.
+      # The rest are for rdkafka-sys, which builds librdkafka from source via
+      # cmake; without the curl headers in particular it fails with
+      # "fatal error: curl/curl.h: No such file or directory".
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -133,7 +153,11 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            pkg-config
+            pkg-config \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsasl2-dev \
+            zlib1g-dev
 
       - name: Install Rust 1.75.0
         uses: dtolnay/rust-toolchain@1.75.0
