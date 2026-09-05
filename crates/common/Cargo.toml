@@ -24,6 +24,8 @@ thiserror.workspace = true
 # Observability
 tracing.workspace = true
 prometheus.workspace = true
+# HTTP server for the /metrics and /health endpoints
+hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
 
 # Concurrency
 crossbeam-channel.workspace = true

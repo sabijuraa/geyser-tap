@@ -1465,6 +1465,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "futures",
+ "hyper",
  "once_cell",
  "parking_lot",
  "prometheus",

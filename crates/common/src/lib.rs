@@ -21,6 +21,7 @@
 pub mod config;
 pub mod error;
 pub mod metrics;
+pub mod metrics_server;
 pub mod sink;
 pub mod types;
 

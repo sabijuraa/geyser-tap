@@ -25,7 +25,11 @@
 //! When full, the plugin drops updates to protect the validator.
 
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use geyser_tap_common::{EnvelopedUpdate, GeyserTapError, PluginConfig, Sink, Update};
+use geyser_tap_common::metrics_server::Readiness;
+use geyser_tap_common::{
+    EnvelopedUpdate, GeyserTapError, MetricsConfig, PluginConfig, Sink, Update,
+};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -82,6 +86,10 @@ pub struct PluginRuntime {
     sender: UpdateSender,
     /// Update receiver for worker
     receiver: Option<Receiver<EnvelopedUpdate>>,
+    /// Metrics/health endpoint configuration
+    metrics: MetricsConfig,
+    /// Readiness flag driven by sink startup, read by /health/ready
+    readiness: Readiness,
 }
 
 impl PluginRuntime {
@@ -108,6 +116,8 @@ impl PluginRuntime {
             worker_handle: None,
             sender,
             receiver: Some(rx),
+            metrics: config.metrics.clone(),
+            readiness: Readiness::new(),
         })
     }
 
@@ -128,11 +138,14 @@ impl PluginRuntime {
             .take()
             .ok_or_else(|| GeyserTapError::Internal("receiver already taken".to_string()))?;
 
+        let metrics = self.metrics.clone();
+        let readiness = self.readiness.clone();
+
         let handle = thread::Builder::new()
             .name("geyser-tap-main".to_string())
             .spawn(move || {
                 runtime.block_on(async move {
-                    run_worker(receiver, sinks).await;
+                    run_worker(receiver, sinks, metrics, readiness).await;
                 });
             })
             .map_err(|e| GeyserTapError::Internal(format!("failed to spawn worker: {e}")))?;
@@ -158,11 +171,39 @@ impl PluginRuntime {
 }
 
 /// Worker loop that processes updates and sends to sinks.
-async fn run_worker(receiver: Receiver<EnvelopedUpdate>, sinks: Vec<Box<dyn Sink>>) {
+async fn run_worker(
+    receiver: Receiver<EnvelopedUpdate>,
+    sinks: Vec<Box<dyn Sink>>,
+    metrics: MetricsConfig,
+    readiness: Readiness,
+) {
     tracing::info!(
         sink_count = sinks.len(),
         "Starting Geyser plugin worker"
     );
+
+    // Bind the metrics/health endpoints first, so /health/live answers while
+    // the sinks are still coming up and a bind failure is visible immediately.
+    if metrics.enabled {
+        match metrics.bind_address.parse::<SocketAddr>() {
+            Ok(addr) => match geyser_tap_common::metrics_server::start(addr, readiness.clone()).await
+            {
+                Ok(bound) => tracing::info!(address = %bound, "Metrics server listening"),
+                Err(e) => tracing::error!(
+                    address = %addr,
+                    error = %e,
+                    "Failed to start metrics server; continuing without it"
+                ),
+            },
+            Err(e) => tracing::error!(
+                bind_address = %metrics.bind_address,
+                error = %e,
+                "Invalid metrics bind_address; continuing without metrics server"
+            ),
+        }
+    } else {
+        tracing::info!("Metrics server disabled by configuration");
+    }
 
     // Start each sink from inside the runtime. Sinks that listen on a socket
     // bind here; a failure is logged and that sink is left unstarted rather
@@ -177,6 +218,9 @@ async fn run_worker(receiver: Receiver<EnvelopedUpdate>, sinks: Vec<Box<dyn Sink
             ),
         }
     }
+
+    // Sinks are up (or logged as failed); the plugin can serve traffic.
+    readiness.set_ready();
 
     loop {
         // Receive update (blocking on crossbeam channel from sync context)
@@ -206,6 +250,9 @@ async fn run_worker(receiver: Receiver<EnvelopedUpdate>, sinks: Vec<Box<dyn Sink
             }
         }
     }
+
+    // Stop advertising readiness before tearing sinks down.
+    readiness.set_not_ready();
 
     // Shutdown sinks gracefully
     tracing::info!("Shutting down sinks");
