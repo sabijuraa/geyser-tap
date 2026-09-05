@@ -1,0 +1,42 @@
+[package]
+name = "geyser-tap-sink-grpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "gRPC sink implementation for geyser-tap"
+
+[dependencies]
+geyser-tap-common.workspace = true
+geyser-tap-proto.workspace = true
+
+# gRPC
+tonic.workspace = true
+prost.workspace = true
+http = "0.2"
+
+# Async
+tokio.workspace = true
+
+# Observability
+tracing.workspace = true
+prometheus.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Concurrency
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+
+# Serialization
+serde.workspace = true
+bytes.workspace = true
+
+# Streaming
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
