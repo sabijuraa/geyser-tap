@@ -13,7 +13,14 @@
 # =============================================================================
 # Stage 1: Build Environment
 # =============================================================================
-FROM rust:1.82-bookworm AS builder
+# Rust 1.75 is REQUIRED, not a preference. The plugin exports
+# `_create_plugin() -> *mut dyn GeyserPlugin`, a Rust trait-object fat pointer
+# handed across dlopen. Vtable layout is not ABI-stable across compiler
+# versions, so a plugin built with a different rustc than the target validator
+# segfaults the validator on load. solana-test-validator 1.18.26 is built with
+# rustc 1.75.0. This previously pinned 1.82 and produced a .so that crashed.
+# Keep in sync with rust-toolchain.toml.
+FROM rust:1.75-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
