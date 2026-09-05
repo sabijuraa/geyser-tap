@@ -1,0 +1,61 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.env
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Test artifacts
+*.profraw
+coverage/
+
+# Docker
+docker-compose.override.yml
+
+# Local configuration (don't commit secrets)
+config.json
+config.local.json
+config/prometheus.yml
+config/grafana/
+
+# Benchmark results
+criterion/
+
+# Node
+node_modules/
+
+# Keys, keypairs, secrets (never commit)
+*.key
+*.pem
+*.p12
+*.pfx
+keypair*.json
+*-keypair.json
+secrets/
+secrets.*
+.secrets/
+id_rsa*
+id_ed25519*

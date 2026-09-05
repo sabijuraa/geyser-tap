@@ -1,0 +1,30 @@
+# Clippy configuration for geyser-tap
+#
+# These settings enforce strict code quality without being pedantic.
+
+# Maximum cognitive complexity for functions
+cognitive-complexity-threshold = 25
+
+# Minimum lines for a function to be considered "large"
+too-many-lines-threshold = 100
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Maximum arguments for a function
+too-many-arguments-threshold = 7
+
+# Documentation requirements
+missing-docs-in-crate-items = true
+
+# Unsafe blocks
+allow-unwrap-in-tests = true
+
+# Disallowed methods (use alternatives)
+disallowed-methods = [
+    # Use tracing instead of println for production code
+    { path = "std::io::_print", reason = "Use tracing macros instead" },
+]
+
+# Allowed identifier names (exceptions to naming rules)
+allowed-idents-below-min-chars = ["i", "j", "k", "n", "x", "y", "id", "tx", "rx"]
