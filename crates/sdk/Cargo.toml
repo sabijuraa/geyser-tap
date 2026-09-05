@@ -1,0 +1,33 @@
+[package]
+name = "geyser-tap-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rust client SDK for geyser-tap gRPC streaming"
+
+[dependencies]
+geyser-tap-proto.workspace = true
+
+# gRPC client
+tonic.workspace = true
+prost.workspace = true
+
+# Async
+tokio.workspace = true
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Observability
+tracing.workspace = true
+
+# Serialization
+bytes.workspace = true
+bs58.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"
