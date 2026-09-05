@@ -1,10 +1,13 @@
 # geyser-tap Definition of Done Verification
 
 Date: 2026-09-05
-Status: end-to-end PASS. Three areas are explicitly NOT proven and are marked
-as such below: Kafka delivery (implemented, never run against a broker), the
-Docker image (pin corrected, never built -- no reachable daemon), and
-Prometheus metrics (counters recorded, but no exporter exists at all).
+Status: end-to-end PASS, and every Definition-of-Done item is now verified
+against live infrastructure rather than asserted. Kafka was run against a real
+broker, the Docker image was built and its artifact loaded into a validator,
+and the Prometheus exporter is served and scraped.
+
+Remaining gaps are narrower and listed at the bottom; none of them are items
+previously claimed as done.
 
 End-to-end now genuinely works: the plugin loads into
 `solana-test-validator 1.18.26`, both the gRPC and websocket sinks bind, and
@@ -360,18 +363,24 @@ the run.
 | FR8: Metrics | PASS - /metrics + /health served and scraped |
 | Clippy / tests | PASS - 33 tests |
 | E2E consumer test | PASS - 5496 updates, all five types |
-| Docker image | UNVERIFIED - no daemon |
+| Docker image | PASS - built, artifact loads and streams |
 
-Outstanding, in rough priority order:
+Outstanding, in rough priority order. None of these are items previously
+claimed as done:
 
-1. No Prometheus exporter: counters are recorded but unreachable, and
-   `metrics.bind_address` is dead config.
-2. Kafka delivery has never been exercised against a broker.
-3. The Docker image build is unverified -- no reachable daemon here.
-4. Plugin `tracing` output never reaches the validator log: `solana_logger`
+1. Plugin `tracing` output never reaches the validator log: `solana_logger`
    installs the global `log` logger first, so the plugin's
    `tracing_subscriber` init is a no-op. All plugin-side diagnostics are
-   currently invisible in `validator.log`.
-5. Websocket sink has no per-client filtering.
-6. `on_load` is not panic-wrapped.
-7. Transaction `meta` is always `None`.
+   invisible in `validator.log`. This made the original segfault far harder to
+   diagnose than it needed to be.
+2. Websocket sink has no per-client filtering: every connected client receives
+   the full configured stream.
+3. `on_load` is not wrapped in `catch_panic`; a panic there still aborts.
+4. Transaction `meta` is always `None` -- the status-meta types do not
+   implement Serialize.
+5. Non-legacy versioned transactions fall back to emitting the message hash
+   rather than the full transaction.
+6. Kafka SASL/SSL is untested (those features are disabled in the build), as
+   is multi-broker/failover behaviour.
+7. Only the Docker `builder` stage was built; the slim `runtime` stage was not.
+8. Backpressure drops are implemented but never forced under load.

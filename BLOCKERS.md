@@ -154,29 +154,51 @@ present; all absent under `panic="abort"`).
 
 `on_load` is still not wrapped in `catch_panic`.
 
-## OPEN: Docker image build unverified
+## RESOLVED: Docker image build
 
-The Dockerfile pinned `rust:1.82`, which builds a `.so` that segfaults the
-validator on load. It is now pinned to `rust:1.75` to match, and
-`protobuf-compiler` (needed by the new tonic-build step) was already present.
+**Status: RESOLVED (2026-09-05).** The Dockerfile pinned `rust:1.82`, which
+builds a `.so` that segfaults the validator on load; it is now `rust:1.75`.
+That fix was previously reasoned but unverified because Docker Desktop's WSL
+integration is disabled. A native daemon works instead.
 
-The build itself could **not** be run here:
+Two environmental workarounds were needed on this WSL2 kernel
+(`7.1.3-microsoft-standard-WSL2`), neither of which is a project problem:
 
-```
-$ docker build -t geyser-tap:verify --target builder .
-We recommend to activate the WSL integration in Docker Desktop settings.
-```
+- No `xt_addrtype` module and no bridge netlink support, so `dockerd` cannot
+  create `docker0`:
+  `Failed to create bridge docker0 via netlink: operation not supported`.
+  Run `dockerd --bridge=none --iptables=false --ip6tables=false` and build
+  with `docker build --network=host`.
+- The build context was the 18GB `target/` directory, which the daemon has to
+  receive before the build starts. Added `.dockerignore`; context is now 748KB.
 
-The Docker daemon is unreachable from WSL in this environment. The pin matches
-`rust-toolchain.toml`, which is verified working on the host, but the
-container build is untested. Someone with a working daemon should run it and
-confirm the resulting `.so` loads.
+The image builds and its artifact was extracted and loaded into a real
+validator: no segfault, both sink ports and the metrics port bound, and a
+consumer received 3698 updates across all five update types. The container
+artifact is a distinct binary from the host build (md5 `e4027d87...` vs
+`d1e3a616...`), so this tested the container toolchain rather than re-testing
+the host one.
 
-## OPEN: Kafka sink never exercised
+Only the `builder` stage was built; the slim `runtime` stage was not.
 
-The rdkafka producer is implemented but no broker has ever been run against
-it, so no message has been confirmed delivered. `docker-compose.yml` provides
-a Kafka service; verifying this needs a working Docker daemon.
+## RESOLVED: Kafka sink verified against a live broker
+
+**Status: RESOLVED (2026-09-05).** Previously "implemented, never run against
+a broker". Apache Kafka 3.7.1 was run in KRaft mode (single node, no
+ZooKeeper) on localhost:9092.
+
+Running it immediately exposed a bug that code review had not: the producer
+sets `enable.idempotence=true`, which librdkafka only permits with
+`acks=all`, while the config default and both shipped examples used `"1"`.
+Validator startup aborted with `Client creation error: acks must be set to
+all when enable.idempotence is true`, so the sink could never have worked as
+documented. Fixed by forcing `acks=all` with a warning.
+
+After the fix, messages land on all three topics and decode as
+`StreamUpdate`s with real signatures and account pubkeys. Evidence is in
+VERIFICATION.md.
+
+Not covered: SASL/SSL (disabled in the build) and multi-broker failover.
 
 ## OPEN: Plugin logs never reach the validator log
 
@@ -190,7 +212,7 @@ which does land in the ledger's `validator.log`.
 Bridging tracing onto the `log` facade, or writing to a plugin-owned file,
 would make the plugin observable in production.
 
-## OPEN: no Prometheus exporter exists
+## RESOLVED: no Prometheus exporter existed
 
 `crates/common/src/metrics.rs` defines the counters and they are incremented
 at runtime, but nothing ever gathers, encodes or serves them. There is no
@@ -202,11 +224,17 @@ $ grep -rn 'TextEncoder\|prometheus::gather\|default_registry' --include=*.rs cr
 (no matches)
 ```
 
-`MetricsConfig::bind_address` is parsed from config and then never read, so a
-config that enables metrics is silently inert and the plugin cannot be scraped.
+`MetricsConfig::bind_address` was parsed from config and then never read, so a
+config that enabled metrics was silently inert and the plugin could not be
+scraped.
 
-This was previously described as "endpoint present, not scraped", which
-overstated it. The counters are real; the exposition side does not exist.
+This had previously been described as "endpoint present, not scraped", which
+overstated it: the counters were real, but the exposition side did not exist.
+
+**Status: RESOLVED (2026-09-05).** `common::metrics_server` now serves
+`/metrics` (prometheus text exposition), `/health/live` and `/health/ready`,
+and has been scraped against a live validator. Evidence in VERIFICATION.md
+(FR8).
 
 ## RESOLVED: tests/integration.rs never ran
 

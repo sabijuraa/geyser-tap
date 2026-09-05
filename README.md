@@ -25,7 +25,11 @@ Not everything is proven. Current state, honestly:
 | Backpressure | Implemented; not stress-tested to forced drops |
 | Kafka sink | **Verified** - messages produced to and read back off a live broker |
 | Prometheus metrics | **Verified** - `/metrics` and health endpoints served and scraped |
-| Docker image | Rust pin corrected but **image never built** (no daemon here) |
+| Docker image | **Verified** - image builds; its `.so` loads and streams |
+
+Every Definition-of-Done item has now been checked against live
+infrastructure rather than asserted; see [VERIFICATION.md](VERIFICATION.md)
+for the captured output. Remaining known gaps are listed there.
 
 This is a portfolio/reference implementation, not something that has carried
 production traffic.
