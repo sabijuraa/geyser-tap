@@ -1,0 +1,16 @@
+[package]
+name = "geyser-tap-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Protocol buffer definitions for geyser-tap"
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tonic.workspace = true
+bytes.workspace = true
+geyser-tap-common.workspace = true
+
+# build-dependencies removed - types defined manually in lib.rs

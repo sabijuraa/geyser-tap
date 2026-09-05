@@ -1,0 +1,220 @@
+// Geyser-Tap Streaming Protocol
+//
+// This protocol defines the wire format for streaming Solana validator
+// updates to downstream consumers.
+//
+// Design principles:
+// - Binary-efficient: use bytes for fixed-size fields (pubkeys, signatures)
+// - Extensible: use optional fields liberally for forward compatibility
+// - Zero-copy friendly: bytes fields can reference external buffers
+
+syntax = "proto3";
+
+package geyser;
+
+option java_package = "com.example.geyser";
+option java_multiple_files = true;
+
+// =============================================================================
+// Streaming Service
+// =============================================================================
+
+// GeyserStream provides a bidirectional streaming interface for consuming
+// Solana validator updates in real-time.
+service GeyserStream {
+  // Subscribe opens a server-streaming RPC that delivers updates matching
+  // the subscription filter.
+  rpc Subscribe(SubscribeRequest) returns (stream StreamUpdate);
+
+  // Ping checks if the server is alive. Used for health checks.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// =============================================================================
+// Request/Response Messages
+// =============================================================================
+
+message SubscribeRequest {
+  // Filter for account updates
+  AccountFilter accounts = 1;
+
+  // Filter for transaction updates
+  TransactionFilter transactions = 2;
+
+  // Whether to receive slot updates
+  bool slots = 3;
+
+  // Whether to receive entry updates (high volume!)
+  bool entries = 4;
+
+  // Whether to receive block metadata updates
+  bool block_metadata = 5;
+
+  // Optional: start from a specific slot (for replay)
+  optional uint64 start_slot = 10;
+}
+
+message AccountFilter {
+  // Account owners to include (empty = all)
+  repeated bytes owners = 1;
+
+  // Account pubkeys to include (empty = all)
+  repeated bytes pubkeys = 2;
+}
+
+message TransactionFilter {
+  // Whether to include vote transactions
+  bool include_votes = 1;
+
+  // Whether to include failed transactions
+  bool include_failed = 2;
+
+  // Account keys that must be involved in the transaction
+  repeated bytes account_keys = 3;
+}
+
+message PingRequest {
+  // Client-provided timestamp for latency measurement
+  uint64 timestamp_ns = 1;
+}
+
+message PingResponse {
+  // Echo of client timestamp
+  uint64 client_timestamp_ns = 1;
+
+  // Server timestamp
+  uint64 server_timestamp_ns = 2;
+
+  // Current slot being processed
+  uint64 current_slot = 3;
+}
+
+// =============================================================================
+// Stream Messages
+// =============================================================================
+
+// StreamUpdate is the envelope for all streamed updates.
+message StreamUpdate {
+  // Monotonically increasing sequence number for ordering
+  uint64 sequence = 1;
+
+  // Timestamp when the update was received (nanoseconds since epoch)
+  uint64 timestamp_ns = 2;
+
+  // The actual payload (exactly one will be set)
+  oneof payload {
+    AccountUpdate account = 10;
+    TransactionUpdate transaction = 11;
+    SlotUpdate slot = 12;
+    EntryUpdate entry = 13;
+    BlockMetadataUpdate block_metadata = 14;
+  }
+}
+
+// =============================================================================
+// Update Types
+// =============================================================================
+
+message AccountUpdate {
+  // Account public key (32 bytes)
+  bytes pubkey = 1;
+
+  // Account data (variable size)
+  bytes data = 2;
+
+  // Slot at which this update occurred
+  uint64 slot = 3;
+
+  // Account owner program (32 bytes)
+  bytes owner = 4;
+
+  // Lamport balance
+  uint64 lamports = 5;
+
+  // Rent epoch
+  uint64 rent_epoch = 6;
+
+  // Whether the account is executable
+  bool executable = 7;
+
+  // Write version for ordering
+  uint64 write_version = 8;
+
+  // Transaction signature that caused this update (64 bytes, optional)
+  optional bytes txn_signature = 9;
+}
+
+message TransactionUpdate {
+  // Transaction signature (64 bytes)
+  bytes signature = 1;
+
+  // Serialized transaction
+  bytes transaction = 2;
+
+  // Slot containing this transaction
+  uint64 slot = 3;
+
+  // Index within the slot
+  uint64 index = 4;
+
+  // Whether this is a vote transaction
+  bool is_vote = 5;
+
+  // Transaction metadata (serialized TransactionStatusMeta)
+  optional bytes meta = 6;
+}
+
+message SlotUpdate {
+  // Slot number
+  uint64 slot = 1;
+
+  // Parent slot number
+  optional uint64 parent = 2;
+
+  // Slot status
+  SlotStatus status = 3;
+}
+
+enum SlotStatus {
+  SLOT_STATUS_UNKNOWN = 0;
+  SLOT_STATUS_PROCESSED = 1;
+  SLOT_STATUS_ROOTED = 2;
+  SLOT_STATUS_CONFIRMED = 3;
+}
+
+message EntryUpdate {
+  // Slot containing this entry
+  uint64 slot = 1;
+
+  // Entry index within the slot
+  uint64 index = 2;
+
+  // Number of hashes since previous entry
+  uint64 num_hashes = 3;
+
+  // Entry hash (32 bytes)
+  bytes hash = 4;
+
+  // Serialized entry data
+  bytes entry = 5;
+
+  // Number of executed transactions in this entry
+  uint64 executed_transaction_count = 6;
+}
+
+message BlockMetadataUpdate {
+  // Slot number
+  uint64 slot = 1;
+
+  // Block hash (32 bytes)
+  bytes blockhash = 2;
+
+  // Block time (Unix timestamp)
+  optional int64 block_time = 3;
+
+  // Block height
+  optional uint64 block_height = 4;
+
+  // Rewards (serialized)
+  optional bytes rewards = 5;
+}
