@@ -1,4 +1,13 @@
+# MUST match the rustc used to build the target validator.
+#
+# Geyser plugins are loaded via `_create_plugin() -> *mut dyn GeyserPlugin`,
+# which hands a Rust trait-object fat pointer across the dlopen boundary.
+# Rust vtable layout is NOT ABI-stable across compiler versions, so a plugin
+# built with a different rustc than the validator segfaults on load.
+#
+# solana-test-validator 1.18.26 (commit d9f20e95) is built with rustc 1.75.0
+# (rustc commit 82e1608dfa6e0b5569232559e3d385fea5a93112).
 [toolchain]
-channel = "1.88"
+channel = "1.75"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

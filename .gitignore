@@ -1,7 +1,10 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
-Cargo.lock
+# NOTE: Cargo.lock IS committed. The plugin must build under rustc 1.75 to
+# match the validator, which requires pinning several transitive deps below
+# their latest (MSRV-incompatible) releases. Those pins only survive in the
+# lockfile, so dropping it reintroduces the build failure.
 
 # IDE
 .idea/
