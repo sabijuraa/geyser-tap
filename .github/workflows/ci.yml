@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # protoc: crates/proto/build.rs generates the tonic service layer.
       # The rest are for rdkafka-sys, which builds librdkafka from source via
@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # protoc: crates/proto/build.rs generates the tonic service layer.
       # The rest are for rdkafka-sys, which builds librdkafka from source via
@@ -140,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # protoc: crates/proto/build.rs generates the tonic service layer.
       # The rest are for rdkafka-sys, which builds librdkafka from source via
@@ -188,7 +188,7 @@ jobs:
           echo "unwind support present (panic=unwind)"
 
       - name: Upload plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libgeyser_tap_plugin
           path: target/release/libgeyser_tap_plugin.so
