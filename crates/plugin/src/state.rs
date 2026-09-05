@@ -71,6 +71,16 @@ impl PluginState {
             }
         }
 
+        // The websocket sink was previously not wired into the plugin, so its
+        // filters were never merged here. Now that create_sinks() builds it,
+        // an update type enabled only on the ws sink must still be ingested.
+        if let Some(ref ws) = config.ws {
+            if ws.enabled {
+                merge_filter(&mut update_types, &ws.filters.update_types);
+                include_votes |= ws.filters.include_votes;
+            }
+        }
+
         PluginFilter {
             update_types,
             include_votes,
