@@ -552,4 +552,42 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<GeyserTapPlugin>();
     }
+
+    /// A panic inside a validator callback must be caught at the FFI boundary
+    /// and converted into an error, never unwound into the validator and never
+    /// aborted.
+    ///
+    /// This is the regression test for the release profile being set to
+    /// `panic = "abort"`, under which `catch_unwind` cannot catch anything and
+    /// this test's process would abort instead of failing gracefully.
+    #[test]
+    fn callback_panic_is_caught_and_returned_as_error() {
+        let plugin = GeyserTapPlugin::new();
+
+        // Silence the default panic hook so the captured panic does not spam
+        // test output; restore it afterwards.
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+
+        let result: PluginResult<()> = plugin.catch_panic(
+            "test_callback",
+            AssertUnwindSafe(|| panic!("simulated callback panic")),
+        );
+
+        panic::set_hook(previous);
+
+        assert!(
+            result.is_err(),
+            "a panicking callback must return Err, not unwind into the validator"
+        );
+    }
+
+    /// The panic-catching wrapper must not disturb the non-panicking path.
+    #[test]
+    fn catch_panic_passes_through_success() {
+        let plugin = GeyserTapPlugin::new();
+        let result: PluginResult<u32> =
+            plugin.catch_panic("test_callback", AssertUnwindSafe(|| Ok(42)));
+        assert_eq!(result.expect("should pass through"), 42);
+    }
 }

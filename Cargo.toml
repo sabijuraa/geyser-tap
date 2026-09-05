@@ -78,7 +78,14 @@ geyser-tap-sdk = { path = "crates/sdk" }
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"  # Critical: prevents unwinding across FFI boundary
+# MUST be "unwind". The plugin wraps every validator callback in
+# `catch_unwind` (crates/plugin/src/ffi.rs) so a panic inside the plugin is
+# caught, logged and turned into an error instead of killing the validator.
+# Under panic="abort" there is no unwinding, so `catch_unwind` can never catch
+# anything and the process aborts -- which made the FFI panic-isolation claim
+# false. Unwinding is confined to the plugin: `catch_unwind` sits immediately
+# inside each `extern "C"` callback, so no panic reaches the FFI boundary.
+panic = "unwind"
 opt-level = 3
 debug = false
 strip = "symbols"
