@@ -164,6 +164,20 @@ async fn run_worker(receiver: Receiver<EnvelopedUpdate>, sinks: Vec<Box<dyn Sink
         "Starting Geyser plugin worker"
     );
 
+    // Start each sink from inside the runtime. Sinks that listen on a socket
+    // bind here; a failure is logged and that sink is left unstarted rather
+    // than taking down the validator.
+    for sink in &sinks {
+        match sink.start().await {
+            Ok(()) => tracing::info!(sink = sink.name(), "Sink started"),
+            Err(e) => tracing::error!(
+                sink = sink.name(),
+                error = %e,
+                "Failed to start sink; it will not receive updates"
+            ),
+        }
+    }
+
     loop {
         // Receive update (blocking on crossbeam channel from sync context)
         let envelope = match receiver.recv() {

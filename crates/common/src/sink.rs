@@ -100,6 +100,20 @@ pub trait Sink: Send + Sync + 'static {
     /// The update is owned and can be serialized/transmitted asynchronously.
     fn send(&self, update: Update) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>>;
 
+    /// Start the sink.
+    ///
+    /// Called once by the plugin worker, from inside the async runtime, before
+    /// any updates are delivered. Sinks that own a listening socket (gRPC,
+    /// websocket) bind it here; a sink that needs no startup can rely on the
+    /// default no-op.
+    ///
+    /// Binding must happen here rather than in the constructor because
+    /// `create_sinks()` runs on the validator's thread during `on_load`, where
+    /// there is no reactor to register a listener with.
+    fn start(&self) -> Pin<Box<dyn Future<Output = SinkResult<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Flush any buffered updates to the downstream.
     ///
     /// Called periodically and before shutdown to ensure data is persisted.
