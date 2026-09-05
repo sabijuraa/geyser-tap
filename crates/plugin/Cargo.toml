@@ -1,0 +1,57 @@
+[package]
+name = "geyser-tap-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Solana Geyser plugin for streaming validator data to gRPC and Kafka sinks"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "geyser_tap_plugin"
+
+[dependencies]
+# Solana
+solana-geyser-plugin-interface.workspace = true
+solana-sdk.workspace = true
+solana-transaction-status.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Internal crates
+geyser-tap-common.workspace = true
+geyser-tap-proto.workspace = true
+geyser-tap-sink-grpc.workspace = true
+geyser-tap-sink-kafka.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Observability
+tracing.workspace = true
+tracing-subscriber.workspace = true
+prometheus.workspace = true
+
+# Configuration
+config.workspace = true
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# FFI safety
+libc.workspace = true
+
+# Concurrency
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
+bytes.workspace = true
+bs58.workspace = true
+
+# Serialization
+bincode.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"
