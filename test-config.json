@@ -16,7 +16,9 @@
         "slots": true,
         "entries": true,
         "block_metadata": true
-      }
+      },
+      "include_votes": true,
+      "include_failed": true
     }
   },
   "ws": {
@@ -25,11 +27,15 @@
     "max_clients": 10,
     "send_buffer_size": 1000,
     "filters": {
-      "accounts": true,
-      "transactions": true,
-      "slots": true,
-      "entries": true,
-      "block_metadata": true
+      "include_votes": true,
+      "include_failed": true,
+      "update_types": {
+        "accounts": true,
+        "transactions": true,
+        "slots": true,
+        "entries": true,
+        "block_metadata": true
+      }
     }
   }
 }
