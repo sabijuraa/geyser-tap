@@ -47,8 +47,29 @@ impl KafkaProducer {
         // Required settings
         client_config.set("bootstrap.servers", &config.brokers);
 
-        // Producer settings
-        client_config.set("acks", &config.producer.acks);
+        // Producer settings.
+        //
+        // The idempotent producer is enabled below for exactly-once delivery,
+        // and librdkafka refuses to construct a client unless `acks` is "all"
+        // when it is on:
+        //
+        //     Client creation error: `acks` must be set to `all` when
+        //     `enable.idempotence` is true
+        //
+        // The config default and the shipped example both used "1", so the
+        // Kafka sink could never be constructed as documented. Rather than
+        // failing on a setting the user probably did not choose deliberately,
+        // force "all" and say so when it differs.
+        let acks = if config.producer.acks == "all" {
+            config.producer.acks.clone()
+        } else {
+            tracing::warn!(
+                configured = %config.producer.acks,
+                "Overriding acks to \"all\": required by the idempotent producer"
+            );
+            "all".to_string()
+        };
+        client_config.set("acks", &acks);
         client_config.set("compression.type", &config.producer.compression);
         client_config.set("batch.size", config.producer.batch_size.to_string());
         client_config.set("linger.ms", config.producer.linger_ms.to_string());

@@ -7,6 +7,7 @@ license.workspace = true
 description = "Kafka sink implementation for geyser-tap"
 
 [dependencies]
+bs58.workspace = true
 geyser-tap-common.workspace = true
 geyser-tap-proto.workspace = true
 

@@ -246,7 +246,8 @@ impl KafkaSinkConfig {
 /// Kafka producer settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KafkaProducerConfig {
-    /// Producer acks setting ("0", "1", "all")
+    /// Producer acks setting. Must be "all" -- the idempotent producer
+    /// requires it, and any other value is overridden with a warning.
     #[serde(default = "default_acks")]
     pub acks: String,
 
@@ -270,7 +271,7 @@ pub struct KafkaProducerConfig {
 impl Default for KafkaProducerConfig {
     fn default() -> Self {
         Self {
-            acks: "1".to_string(),
+            acks: "all".to_string(),
             compression: "zstd".to_string(),
             batch_size: 1_000_000,
             linger_ms: 5,
@@ -432,7 +433,9 @@ fn default_send_buffer_size() -> usize {
     65536
 }
 fn default_acks() -> String {
-    "1".to_string()
+    // Must be "all": the producer enables idempotence, and librdkafka rejects
+    // any other acks value in that mode.
+    "all".to_string()
 }
 fn default_compression() -> String {
     "zstd".to_string()

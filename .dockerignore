@@ -1,0 +1,27 @@
+# Build artifacts. Without this the build context is the whole target/
+# directory (18GB here), which the daemon has to receive before the build
+# even starts.
+target/
+**/target/
+
+# VCS and local state
+.git/
+.github/
+
+# Local configuration and test output
+config.json
+config.local.json
+config/grafana/
+*.log
+coverage/
+criterion/
+
+# Never ship into a build context
+.env
+.env.local
+*.env
+*.key
+*.pem
+keypair*.json
+secrets/
+node_modules/

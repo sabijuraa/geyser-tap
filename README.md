@@ -269,6 +269,7 @@ See [config.example.json](config.example.json) for full options.
 | `kafka` | `enabled` | `false` | Enable Kafka publishing |
 | `kafka` | `brokers` | - | Kafka broker list |
 | `kafka` | `topic` | - | Default topic |
+| `kafka.producer` | `acks` | `all` | Required by the idempotent producer |
 | `kafka.producer` | `compression` | `zstd` | Compression codec |
 | `plugin` | `channel_capacity` | `100000` | Internal buffer size |
 | `metrics` | `enabled` | `true` | Enable Prometheus |

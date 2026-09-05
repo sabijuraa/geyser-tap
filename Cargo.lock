@@ -1569,6 +1569,7 @@ name = "geyser-tap-sink-kafka"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bs58 0.5.1",
  "bytes",
  "crossbeam-channel",
  "geyser-tap-common",
