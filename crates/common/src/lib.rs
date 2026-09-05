@@ -5,8 +5,8 @@
 //! This crate provides:
 //! - [`Sink`] trait for implementing downstream data sinks
 //! - [`Update`] enum representing all validator update types
-//! - [`SinkConfig`] for sink configuration
-//! - Metrics utilities for observability
+//! - [`PluginConfig`] and the per-sink config types
+//! - Prometheus metrics and the `/metrics` + health exporter
 //! - Error types for the entire plugin ecosystem
 //!
 //! ## Design Principles

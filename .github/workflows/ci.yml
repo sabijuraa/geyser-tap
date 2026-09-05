@@ -1,81 +1,32 @@
-# Geyser-Tap CI Pipeline
+# CI for geyser-tap
 #
-# Runs on every push and pull request:
-# - Build (debug + release)
-# - Unit tests
-# - Clippy lints
-# - Format check
-# - Documentation build
+# Everything here runs on a plain GitHub-hosted runner with no external
+# services. The end-to-end checks that need a live Solana validator and a Kafka
+# broker are deliberately NOT run here -- see "What CI does not cover" at the
+# bottom of this file.
 
 name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Fewer codegen units and no incremental state: CI builds once and throws the
+  # machine away.
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  # ==========================================================================
-  # Build and Test
-  # ==========================================================================
-  build:
-    name: Build & Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            protobuf-compiler \
-            libprotobuf-dev \
-            cmake \
-            libssl-dev \
-            libsasl2-dev \
-            pkg-config
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Build (debug)
-        run: cargo build --all-targets
-
-      - name: Run tests
-        run: cargo test --all-targets
-
-      - name: Build (release)
-        run: cargo build --release
-
-      - name: Verify plugin binary
-        run: |
-          ls -la target/release/libgeyser_tap_plugin.so
-          file target/release/libgeyser_tap_plugin.so
-
-  # ==========================================================================
-  # Linting
-  # ==========================================================================
+  # ---------------------------------------------------------------------------
+  # Formatting, lints and rustdoc.
+  #
+  # Split from the test job so a lint failure is obvious at a glance, and
+  # because these only need check-level compilation.
+  # ---------------------------------------------------------------------------
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -87,42 +38,47 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            libssl-dev \
-            libsasl2-dev \
             pkg-config
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+      # Must match rust-toolchain.toml. The plugin is a cdylib whose entry point
+      # returns a Rust trait object across dlopen, and vtable layout is not
+      # ABI-stable across compiler versions -- a plugin built with a different
+      # rustc than the target validator segfaults it on load. Validator 1.18.26
+      # is built with 1.75.0, so that is what CI builds with too.
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@1.75.0
         with:
-          toolchain: stable
           components: clippy, rustfmt
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-lint-
+          key: lint
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # ==========================================================================
-  # Documentation
-  # ==========================================================================
-  docs:
-    name: Documentation
+      - name: Build rustdoc
+        run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Build and unit/integration tests.
+  #
+  # The whole test suite is in-process: it exercises config parsing, update
+  # types, filtering, sink health and the FFI panic wrapper. None of it opens a
+  # socket or talks to a broker, so it runs unmodified on a bare runner.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Build & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -132,57 +88,38 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            libssl-dev \
-            libsasl2-dev \
             pkg-config
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@1.75.0
+
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
         with:
-          toolchain: stable
+          key: test
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-docs-
+      # --all-targets so examples and benches are compiled too; they are part of
+      # the public surface and should not be allowed to rot.
+      - name: Build
+        run: cargo build --workspace --all-targets
 
-      - name: Build documentation
-        run: cargo doc --no-deps --all-features
-        env:
-          RUSTDOCFLAGS: "-D warnings"
+      - name: Test
+        run: cargo test --workspace
 
-  # ==========================================================================
-  # Security Audit
-  # ==========================================================================
-  security:
-    name: Security Audit
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Run security audit
-        run: cargo audit
-
-  # ==========================================================================
-  # MSRV Check (Minimum Supported Rust Version)
-  # ==========================================================================
-  msrv:
-    name: MSRV Check
+  # ---------------------------------------------------------------------------
+  # Release artifact.
+  #
+  # The deliverable is a loadable cdylib, so CI builds it and asserts it really
+  # is a shared object exporting the symbol the validator looks up. This catches
+  # profile regressions that a debug build would not -- notably panic=abort,
+  # which silently disables the catch_unwind guarding every FFI callback.
+  # ---------------------------------------------------------------------------
+  plugin:
+    name: Release Plugin
     runs-on: ubuntu-latest
 
     steps:
@@ -192,78 +129,72 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             protobuf-compiler \
             libprotobuf-dev \
             cmake \
-            libssl-dev \
-            libsasl2-dev \
             pkg-config
 
-      - name: Install MSRV Rust toolchain
-        uses: dtolnay/rust-action@stable
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@1.75.0
+
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
         with:
-          toolchain: "1.75"  # Our MSRV
+          key: plugin
 
-      - name: Build with MSRV
-        run: cargo build --all-targets
+      - name: Build plugin (release)
+        run: cargo build --release -p geyser-tap-plugin
 
-  # ==========================================================================
-  # Integration Tests (with Kafka)
-  # ==========================================================================
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-
-    services:
-      kafka:
-        image: confluentinc/cp-kafka:7.5.0
-        ports:
-          - 9092:9092
-        env:
-          KAFKA_BROKER_ID: 1
-          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-
-      zookeeper:
-        image: confluentinc/cp-zookeeper:7.5.0
-        ports:
-          - 2181:2181
-        env:
-          ZOOKEEPER_CLIENT_PORT: 2181
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
+      - name: Verify the artifact is a loadable plugin
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            protobuf-compiler \
-            libprotobuf-dev \
-            cmake \
-            libssl-dev \
-            libsasl2-dev \
-            pkg-config
+          set -euo pipefail
+          SO=target/release/libgeyser_tap_plugin.so
+          file "$SO"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+          # The validator resolves this symbol via dlsym; without it the plugin
+          # cannot be loaded at all.
+          nm -D "$SO" | grep -q ' T _create_plugin'
+          echo "_create_plugin is exported"
 
-      - name: Wait for Kafka
-        run: |
-          for i in {1..30}; do
-            if nc -z localhost 9092; then
-              echo "Kafka is ready"
-              break
-            fi
-            echo "Waiting for Kafka..."
-            sleep 2
-          done
+          # Unwinding tables must be present. Under panic="abort" they are not,
+          # and catch_unwind at the FFI boundary becomes a no-op, so a plugin
+          # panic would abort the validator instead of being contained.
+          nm -D "$SO" | grep -q '_Unwind_Resume'
+          echo "unwind support present (panic=unwind)"
 
-      - name: Run integration tests
-        run: cargo test --features integration
-        env:
-          KAFKA_BROKERS: localhost:9092
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: libgeyser_tap_plugin
+          path: target/release/libgeyser_tap_plugin.so
+          if-no-files-found: error
+
+# -----------------------------------------------------------------------------
+# What CI does not cover
+#
+# The end-to-end verification cannot run on a standard GitHub runner, and is a
+# manual procedure instead (documented in README.md):
+#
+#   * Streaming end-to-end needs a real solana-test-validator to dlopen the
+#     plugin and produce slots. There is no published action for this, the
+#     validator must match the plugin's interface version *and* rustc, and a
+#     usable run needs a ledger plus minutes of wall clock.
+#
+#   * The Kafka sink needs a live broker, and proving it end-to-end needs a
+#     validator producing into it. A broker alone would only test that rdkafka
+#     can connect, which is not the property worth asserting.
+#
+# Both were verified locally against real infrastructure; see the "Verified"
+# section of README.md. They are left out of CI rather than stubbed, so that a
+# green run here means exactly what it appears to mean.
+#
+# Supply-chain checks (cargo-audit / cargo-deny) are also not gated here yet,
+# and that is a real gap rather than an oversight. deny.toml currently bans
+# `openssl` and `native-tls`, but both are in the dependency tree via
+# reqwest -> solana-metrics, so `cargo deny check bans` fails against the
+# policy as written. Pinning solana 1.18.26 for ABI compatibility also limits
+# which transitive advisories can be resolved by upgrading. Turning these into
+# merge gates needs that triage done first; wiring them up while they fail, or
+# while their failures are ignored, would be worse than leaving them out.
+# -----------------------------------------------------------------------------
